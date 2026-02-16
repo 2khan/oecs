@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "serve": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "bench": "vitest bench --compare ./results/bench-result-0.json --run"
   },
   "license": "MIT",
   "devDependencies": {
