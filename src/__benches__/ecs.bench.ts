@@ -1,0 +1,964 @@
+import { bench, describe } from "vitest";
+import { World } from "../world";
+import { SCHEDULE } from "../schedule/schedule";
+import { get_entity_index, type EntityID } from "../entity/entity";
+import type { ComponentDef, ComponentSchema } from "../component/component";
+
+//=========================================================
+// Helpers
+//=========================================================
+
+function make_schema(n: number): ComponentSchema {
+  const s: ComponentSchema = {};
+  for (let i = 0; i < n; i++) s[`f${i}`] = "f32";
+  return s;
+}
+
+function make_values(n: number): Record<string, number> {
+  const v: Record<string, number> = {};
+  for (let i = 0; i < n; i++) v[`f${i}`] = 1;
+  return v;
+}
+
+function xorshift32(seed: number) {
+  let state = seed;
+  return () => {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return (state >>> 0) / 0x100000000;
+  };
+}
+
+//=========================================================
+// Entity lifecycle
+//=========================================================
+
+describe("entity lifecycle", () => {
+  bench("entity_create_1k", () => {
+    const w = new World();
+    for (let i = 0; i < 1_000; i++) w.create_entity();
+  });
+
+  bench("entity_create_10k", () => {
+    const w = new World();
+    for (let i = 0; i < 10_000; i++) w.create_entity();
+  });
+
+  bench("entity_destroy_10k", () => {
+    const w = new World();
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+    for (let i = 0; i < ids.length; i++) w.destroy_entity(ids[i]);
+  });
+
+  bench("entity_create_destroy_cycle", () => {
+    const w = new World();
+    for (let c = 0; c < 10; c++) {
+      const ids: EntityID[] = [];
+      for (let i = 0; i < 1_000; i++) ids.push(w.create_entity());
+      for (let i = 0; i < ids.length; i++) w.destroy_entity(ids[i]);
+    }
+  });
+});
+
+//=========================================================
+// Component operations (archetype transitions)
+//=========================================================
+
+describe("component operations", () => {
+  const SCHEMAS: ComponentSchema[] = [];
+  for (let i = 0; i < 100; i++) {
+    SCHEMAS.push(make_schema(1 + (i % 5)));
+  }
+
+  bench("register_100_components", () => {
+    const w = new World();
+    for (let i = 0; i < 100; i++) w.register_component(SCHEMAS[i]);
+  });
+
+  bench("add_1_component_10k", () => {
+    const w = new World();
+    const C = w.register_component({ f0: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      w.add_component(ids[i], C, { f0: i });
+    }
+  });
+
+  bench("add_5_components_10k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 5 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.add_component(ids[i], defs[d], vals);
+      }
+    }
+  });
+
+  bench("add_10_components_10k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 10 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.add_component(ids[i], defs[d], vals);
+      }
+    }
+  });
+
+  bench("add_20_components_1k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 20 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 1_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.add_component(ids[i], defs[d], vals);
+      }
+    }
+  });
+
+  bench("add_50_components_1k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 50 }, () =>
+      w.register_component(make_schema(1)),
+    );
+    const vals = make_values(1);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 1_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.add_component(ids[i], defs[d], vals);
+      }
+    }
+  });
+
+  bench("add_100_components_100", () => {
+    const w = new World();
+    const defs = Array.from({ length: 100 }, () =>
+      w.register_component(make_schema(1)),
+    );
+    const vals = make_values(1);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 100; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.add_component(ids[i], defs[d], vals);
+      }
+    }
+  });
+
+  bench("remove_1_from_10_10k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 10 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+      ids.push(id);
+    }
+
+    for (let i = 0; i < ids.length; i++) {
+      w.remove_component(ids[i], defs[0]);
+    }
+  });
+
+  bench("remove_5_from_10_5k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 10 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 5_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+      ids.push(id);
+    }
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < 5; d++) {
+        w.remove_component(ids[i], defs[d]);
+      }
+    }
+  });
+
+  bench("remove_all_10_from_5k", () => {
+    const w = new World();
+    const defs = Array.from({ length: 10 }, () =>
+      w.register_component(make_schema(2)),
+    );
+    const vals = make_values(2);
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 5_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+      ids.push(id);
+    }
+
+    for (let i = 0; i < ids.length; i++) {
+      for (let d = 0; d < defs.length; d++) {
+        w.remove_component(ids[i], defs[d]);
+      }
+    }
+  });
+
+  bench("add_remove_churn_10k", () => {
+    const w = new World();
+    const C = w.register_component({ f0: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+
+    for (let i = 0; i < ids.length; i++) {
+      w.add_component(ids[i], C, { f0: 1 });
+      w.remove_component(ids[i], C);
+    }
+  });
+
+  bench("overwrite_component_10k", () => {
+    const w = new World();
+    const C = w.register_component({ f0: "f32", f1: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      w.add_component(id, C, { f0: 0, f1: 0 });
+      ids.push(id);
+    }
+
+    for (let i = 0; i < ids.length; i++) {
+      w.add_component(ids[i], C, { f0: i, f1: i });
+    }
+  });
+
+  bench("mixed_add_remove_10k", () => {
+    const w = new World();
+    const A = w.register_component({ f0: "f32" });
+    const B = w.register_component({ f0: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      if (i < 5_000) {
+        w.add_component(id, A, { f0: 1 });
+      } else {
+        w.add_component(id, B, { f0: 1 });
+      }
+      ids.push(id);
+    }
+
+    for (let i = 0; i < 5_000; i++) {
+      w.add_component(ids[i], B, { f0: 1 });
+    }
+    for (let i = 5_000; i < 10_000; i++) {
+      w.remove_component(ids[i], B);
+    }
+  });
+});
+
+//=========================================================
+// Archetype fan-out stress
+//=========================================================
+
+describe("archetype fan-out stress", () => {
+  bench("create_100_unique_archetypes", () => {
+    const w = new World();
+    const defs: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 100; i++)
+      defs.push(w.register_component(make_schema(1)));
+    const vals = make_values(1);
+
+    for (let i = 0; i < 100; i++) {
+      const id = w.create_entity();
+      w.add_component(id, defs[i], vals);
+    }
+  });
+
+  bench("create_500_unique_archetypes", () => {
+    const rng = xorshift32(42);
+    const w = new World();
+    const defs: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 100; i++)
+      defs.push(w.register_component(make_schema(1)));
+    const vals = make_values(1);
+
+    for (let i = 0; i < 500; i++) {
+      const id = w.create_entity();
+      const chosen = new Set<number>();
+      while (chosen.size < 5) chosen.add(Math.floor(rng() * 100));
+      for (const c of chosen) w.add_component(id, defs[c], vals);
+    }
+  });
+
+  bench("transition_across_100_archetypes", () => {
+    const w = new World();
+    const defs: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 101; i++)
+      defs.push(w.register_component(make_schema(1)));
+    const vals = make_values(1);
+
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 100; i++) {
+      const id = w.create_entity();
+      w.add_component(id, defs[i], vals);
+      ids.push(id);
+    }
+
+    for (let i = 0; i < ids.length; i++) {
+      w.add_component(ids[i], defs[100], vals);
+    }
+  });
+});
+
+//=========================================================
+// Deferred operations
+//=========================================================
+
+describe("deferred operations", () => {
+  bench("deferred_add_flush_10k", () => {
+    const w = new World();
+    const C = w.register_component({ f0: "f32" });
+
+    const sys = w.register_system({
+      fn(ctx) {
+        for (let i = 0; i < 10_000; i++) {
+          const id = ctx.create_entity();
+          ctx.add_component(id, C, { f0: i });
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("deferred_remove_flush_10k", () => {
+    const w = new World();
+    const C = w.register_component({ f0: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      w.add_component(id, C, { f0: i });
+      ids.push(id);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        for (let i = 0; i < ids.length; i++) {
+          ctx.remove_component(ids[i], C);
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("deferred_mixed_flush_10k", () => {
+    const w = new World();
+    const A = w.register_component({ f0: "f32" });
+    const B = w.register_component({ f0: "f32" });
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      if (i < 5_000) w.add_component(id, A, { f0: 1 });
+      else w.add_component(id, B, { f0: 1 });
+      ids.push(id);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        for (let i = 0; i < 5_000; i++) ctx.add_component(ids[i], B, { f0: 1 });
+        for (let i = 5_000; i < 10_000; i++) ctx.remove_component(ids[i], B);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("deferred_destroy_flush_10k", () => {
+    const w = new World();
+    const ids: EntityID[] = [];
+    for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
+
+    const sys = w.register_system({
+      fn(ctx) {
+        for (let i = 0; i < ids.length; i++) ctx.destroy_entity(ids[i]);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+});
+
+//=========================================================
+// Query & iteration
+//=========================================================
+
+describe("query and iteration", () => {
+  bench("query_cache_hit", () => {
+    const w = new World();
+    const Pos = w.register_component({ x: "f32", y: "f32" });
+    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    for (let i = 0; i < 1_000; i++) {
+      const id = w.create_entity();
+      w.add_component(id, Pos, { x: 0, y: 0 });
+      w.add_component(id, Vel, { vx: 1, vy: 1 });
+    }
+
+    let result: unknown;
+    const sys = w.register_system({
+      fn(ctx) {
+        for (let i = 0; i < 10_000; i++) result = ctx.query(Pos, Vel);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+    void result;
+  });
+
+  bench("query_cold_miss", () => {
+    const w = new World();
+    const defs: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 10; i++)
+      defs.push(w.register_component(make_schema(2)));
+    const vals = make_values(2);
+
+    for (let i = 0; i < 1_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        ctx.query(defs[0], defs[1]);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("query_2_components_across_100_archetypes", () => {
+    const w = new World();
+    const Shared1 = w.register_component(make_schema(1));
+    const Shared2 = w.register_component(make_schema(1));
+    const extras: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 100; i++)
+      extras.push(w.register_component(make_schema(1)));
+    const vals = make_values(1);
+
+    for (let i = 0; i < 100; i++) {
+      const id = w.create_entity();
+      w.add_component(id, Shared1, vals);
+      w.add_component(id, Shared2, vals);
+      w.add_component(id, extras[i], vals);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        ctx.query(Shared1, Shared2);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("query_5_components_across_50_archetypes", () => {
+    const w = new World();
+    const shared: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 5; i++)
+      shared.push(w.register_component(make_schema(1)));
+    const extras: ComponentDef<ComponentSchema>[] = [];
+    for (let i = 0; i < 50; i++)
+      extras.push(w.register_component(make_schema(1)));
+    const vals = make_values(1);
+
+    for (let i = 0; i < 50; i++) {
+      const id = w.create_entity();
+      for (const s of shared) w.add_component(id, s, vals);
+      w.add_component(id, extras[i], vals);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        ctx.query(...shared);
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("iterate_10k_2_components", () => {
+    const w = new World();
+    const Pos = w.register_component({ x: "f32", y: "f32" });
+    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      w.add_component(id, Pos, { x: 0, y: 0 });
+      w.add_component(id, Vel, { vx: 1, vy: 1 });
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        const archetypes = ctx.query(Pos, Vel);
+        const px = ctx.components.get_column(Pos, "x");
+        const py = ctx.components.get_column(Pos, "y");
+        const vx = ctx.components.get_column(Vel, "vx");
+        const vy = ctx.components.get_column(Vel, "vy");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            const idx = get_entity_index(list[i] as EntityID);
+            px[idx] += vx[idx];
+            py[idx] += vy[idx];
+          }
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("iterate_10k_5_components", () => {
+    const w = new World();
+    const defs = Array.from({ length: 5 }, () =>
+      w.register_component({ a: "f32", b: "f32" }),
+    );
+    const vals = { a: 0, b: 0 };
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        const archetypes = ctx.query(...defs);
+        const cols = defs.map((d) => ctx.components.get_column(d, "a"));
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            const idx = get_entity_index(list[i] as EntityID);
+            for (let c = 0; c < cols.length; c++) cols[c][idx] += 1;
+          }
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("iterate_10k_10_components", () => {
+    const w = new World();
+    const defs = Array.from({ length: 10 }, () =>
+      w.register_component({ a: "f32" }),
+    );
+    const vals = { a: 0 };
+    for (let i = 0; i < 10_000; i++) {
+      const id = w.create_entity();
+      for (const d of defs) w.add_component(id, d, vals);
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        const archetypes = ctx.query(...defs);
+        const cols = defs.map((d) => ctx.components.get_column(d, "a"));
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            const idx = get_entity_index(list[i] as EntityID);
+            for (let c = 0; c < cols.length; c++) cols[c][idx] += 1;
+          }
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+
+  bench("iterate_100k_2_components", () => {
+    const w = new World();
+    const Pos = w.register_component({ x: "f32", y: "f32" });
+    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    for (let i = 0; i < 100_000; i++) {
+      const id = w.create_entity();
+      w.add_component(id, Pos, { x: 0, y: 0 });
+      w.add_component(id, Vel, { vx: 1, vy: 1 });
+    }
+
+    const sys = w.register_system({
+      fn(ctx) {
+        const archetypes = ctx.query(Pos, Vel);
+        const px = ctx.components.get_column(Pos, "x");
+        const py = ctx.components.get_column(Pos, "y");
+        const vx = ctx.components.get_column(Vel, "vx");
+        const vy = ctx.components.get_column(Vel, "vy");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            const idx = get_entity_index(list[i] as EntityID);
+            px[idx] += vx[idx];
+            py[idx] += vy[idx];
+          }
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.STARTUP, sys);
+    w.startup();
+  });
+});
+
+//=========================================================
+// System execution (full frame)
+//=========================================================
+
+describe("frame_1_system_10k", () => {
+  const w = new World();
+  const Pos = w.register_component({ x: "f32", y: "f32" });
+  const Vel = w.register_component({ vx: "f32", vy: "f32" });
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    w.add_component(id, Pos, { x: 0, y: 0 });
+    w.add_component(id, Vel, { vx: 1, vy: 1 });
+  }
+
+  const sys = w.register_system({
+    fn(ctx, _dt) {
+      const archetypes = ctx.query(Pos, Vel);
+      const px = ctx.components.get_column(Pos, "x");
+      const vx = ctx.components.get_column(Vel, "vx");
+      for (const arch of archetypes) {
+        const list = arch.entity_list;
+        for (let i = 0; i < list.length; i++) {
+          px[get_entity_index(list[i] as EntityID)] +=
+            vx[get_entity_index(list[i] as EntityID)];
+        }
+      }
+    },
+  });
+  w.add_systems(SCHEDULE.UPDATE, sys);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_3_systems_10k", () => {
+  const w = new World();
+  const Pos = w.register_component({ x: "f32", y: "f32" });
+  const Vel = w.register_component({ vx: "f32", vy: "f32" });
+  const Hp = w.register_component({ current: "f32", max: "f32" });
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    w.add_component(id, Pos, { x: 0, y: 0 });
+    w.add_component(id, Vel, { vx: 1, vy: 1 });
+    w.add_component(id, Hp, { current: 100, max: 100 });
+  }
+
+  const make_sys = (...q: ComponentDef<ComponentSchema>[]) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const archetypes = ctx.query(...q);
+        const col = ctx.components.get_column(q[0], "x" as never);
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    });
+
+  w.add_systems(
+    SCHEDULE.UPDATE,
+    make_sys(Pos, Vel),
+    make_sys(Vel, Hp),
+    make_sys(Pos, Hp),
+  );
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_5_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 5 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_10_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 10 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_25_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 25 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_50_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 50 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_100_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 100 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_200_systems_10k", () => {
+  const w = new World();
+  const defs = Array.from({ length: 200 }, () =>
+    w.register_component({ a: "f32" }),
+  );
+  const vals = { a: 0 };
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    for (const d of defs) w.add_component(id, d, vals);
+  }
+
+  const systems = defs.map((_, si) =>
+    w.register_system({
+      fn(ctx, _dt) {
+        const a = defs[si];
+        const b = defs[(si + 1) % defs.length];
+        const archetypes = ctx.query(a, b);
+        const col = ctx.components.get_column(a, "a");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            col[get_entity_index(list[i] as EntityID)] += 1;
+          }
+        }
+      },
+    }),
+  );
+  w.add_systems(SCHEDULE.UPDATE, ...systems);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});
+
+describe("frame_with_structural_churn", () => {
+  const w = new World();
+  const Pos = w.register_component({ x: "f32", y: "f32" });
+  const Vel = w.register_component({ vx: "f32", vy: "f32" });
+  w.register_component({}); // tag component (unused directly, creates archetype diversity)
+  const Marker = w.register_component({ v: "f32" });
+
+  for (let i = 0; i < 10_000; i++) {
+    const id = w.create_entity();
+    w.add_component(id, Pos, { x: 0, y: 0 });
+    w.add_component(id, Vel, { vx: 1, vy: 1 });
+  }
+
+  for (let s = 0; s < 100; s++) {
+    const sys = w.register_system({
+      fn(ctx, _dt) {
+        const archetypes = ctx.query(Pos, Vel);
+        const px = ctx.components.get_column(Pos, "x");
+        const vx = ctx.components.get_column(Vel, "vx");
+        for (const arch of archetypes) {
+          const list = arch.entity_list;
+          for (let i = 0; i < list.length; i++) {
+            px[get_entity_index(list[i] as EntityID)] +=
+              vx[get_entity_index(list[i] as EntityID)];
+          }
+        }
+      },
+    });
+    w.add_systems(SCHEDULE.UPDATE, sys);
+  }
+
+  let spawned_ids: EntityID[] = [];
+  const churn_sys = w.register_system({
+    fn(ctx) {
+      for (const id of spawned_ids) ctx.destroy_entity(id);
+      spawned_ids = [];
+
+      for (let i = 0; i < 500; i++) {
+        const id = ctx.create_entity();
+        ctx.add_component(id, Marker, { v: i });
+        spawned_ids.push(id);
+      }
+    },
+  });
+  w.add_systems(SCHEDULE.POST_UPDATE, churn_sys);
+  w.startup();
+
+  bench("frame", () => {
+    w.update(0.016);
+  });
+});

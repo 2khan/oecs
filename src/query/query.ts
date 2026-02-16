@@ -3,35 +3,31 @@
  * SystemContext - Store wrapper passed to every system function
  *
  * Provides a cached query() method that returns matching archetypes.
- * Cache invalidation uses per-component fingerprinting: each cache
- * entry tracks the sum of per-component archetype counts for its
- * queried components. When a new archetype is created, only queries
- * whose components overlap with the new archetype's signature see a
- * fingerprint change. Stale entries are rebuilt incrementally — only
- * new archetypes (appended since last rebuild) are tested.
+ * Queries are registered on first call and return a live array that
+ * the ArchetypeRegistry updates automatically when new archetypes are
+ * created. Subsequent calls are a pure hash-map lookup — no
+ * fingerprint validation, no incremental scanning.
  *
  ***/
 
 import type { Store } from "../store/store";
-import type { Archetype, ArchetypeID } from "../archetype/archetype";
+import type { Archetype } from "../archetype/archetype";
 import type { EntityID } from "../entity/entity";
 import type { ComponentRegistry } from "../component/component_registry";
 import type {
   ComponentDef,
-  ComponentID,
   ComponentSchema,
   SchemaValues,
 } from "../component/component";
+import { BitSet } from "../collections/bitset";
 
 //=========================================================
 // Cache entry
 //=========================================================
 
 interface QueryCacheEntry {
-  query_ids: ComponentID[]; // sorted component IDs for collision check
-  fingerprint: number; // sum of per-component archetype counts
-  archetype_count: number; // total archetypes when last rebuilt
-  result: readonly Archetype[];
+  query_mask: BitSet;
+  result: Archetype[];
 }
 
 //=========================================================
@@ -42,7 +38,7 @@ export class SystemContext {
   private readonly store: Store;
 
   private cache: Map<number, QueryCacheEntry[]> = new Map();
-  private scratch_ids: ComponentID[] = [];
+  private scratch_mask: BitSet = new BitSet();
 
   constructor(store: Store) {
     this.store = store;
@@ -61,65 +57,37 @@ export class SystemContext {
   /**
    * Query for archetypes matching all provided component defs.
    *
-   * Results are cached with per-component fingerprinting. Only queries
-   * whose components overlap with newly created archetypes are
-   * invalidated, and stale entries rebuild incrementally by scanning
-   * only the new archetypes.
+   * First call registers with the ArchetypeRegistry and returns a live
+   * array. Subsequent calls return the same array — the registry pushes
+   * new matching archetypes into it automatically.
+   *
+   * Overloads avoid rest-parameter array allocation on the hot path.
    */
-  query(...defs: ComponentDef<ComponentSchema>[]): readonly Archetype[] {
-    // Reuse scratch array to avoid per-call allocation
-    const ids = this.scratch_ids;
-    ids.length = defs.length;
-    for (let i = 0; i < defs.length; i++) {
-      ids[i] = defs[i] as ComponentID;
-    }
-    ids.sort((a, b) => (a as number) - (b as number));
-
-    const key = this.hash_ids(ids);
-    const fingerprint = this.compute_fingerprint(ids);
-
-    const cached = this.find_cached(key, ids);
-
-    if (cached !== undefined && cached.fingerprint === fingerprint) {
-      // Advance archetype_count so the next incremental rebuild doesn't
-      // re-scan archetypes that can't match (their components didn't
-      // change the fingerprint, so they don't contain any queried component).
-      cached.archetype_count = this.store.archetype_count;
-      return cached.result;
+  query(a: ComponentDef<ComponentSchema>): readonly Archetype[];
+  query(a: ComponentDef<ComponentSchema>, b: ComponentDef<ComponentSchema>): readonly Archetype[];
+  query(a: ComponentDef<ComponentSchema>, b: ComponentDef<ComponentSchema>, c: ComponentDef<ComponentSchema>): readonly Archetype[];
+  query(a: ComponentDef<ComponentSchema>, b: ComponentDef<ComponentSchema>, c: ComponentDef<ComponentSchema>, d: ComponentDef<ComponentSchema>): readonly Archetype[];
+  query(...defs: ComponentDef<ComponentSchema>[]): readonly Archetype[];
+  query(): readonly Archetype[] {
+    // Build scratch mask — clear and set bits (uses arguments to avoid rest-param allocation)
+    const mask = this.scratch_mask;
+    mask._words.fill(0);
+    for (let i = 0; i < arguments.length; i++) {
+      mask.set(arguments[i] as unknown as number);
     }
 
-    if (cached !== undefined) {
-      // Incremental rebuild: only scan archetypes added since last rebuild
-      const current_count = this.store.archetype_count;
-      const additions: Archetype[] = [];
+    const key = mask.hash();
 
-      for (let i = cached.archetype_count; i < current_count; i++) {
-        const arch = this.store.get_archetype(i as ArchetypeID);
-        if (arch.matches(ids)) {
-          additions.push(arch);
-        }
-      }
+    // Cache lookup
+    const cached = this.find_cached(key, mask);
+    if (cached !== undefined) return cached.result;
 
-      if (additions.length > 0) {
-        const result = (cached.result as Archetype[]).concat(additions);
-        cached.fingerprint = fingerprint;
-        cached.archetype_count = current_count;
-        cached.result = result;
-        return result;
-      }
-
-      // False positive: fingerprint changed but no new matches
-      cached.fingerprint = fingerprint;
-      cached.archetype_count = current_count;
-      return cached.result;
-    }
-
-    // Cold miss: full scan
-    const result = this.store.get_matching_archetypes(ids);
+    // Cold miss: register with store for push-based updates
+    const result = this.store.register_query(mask);
+    const query_mask = mask.copy();
+    Object.freeze(query_mask);
     const entry: QueryCacheEntry = {
-      query_ids: ids.slice(),
-      fingerprint,
-      archetype_count: this.store.archetype_count,
+      query_mask,
       result,
     };
     const bucket = this.cache.get(key);
@@ -183,40 +151,13 @@ export class SystemContext {
   // Internal
   //=========================================================
 
-  /** FNV-1a hash over sorted ComponentID array. Zero allocation. */
-  private hash_ids(ids: ComponentID[]): number {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < ids.length; i++) {
-      h ^= ids[i] as number;
-      h = Math.imul(h, 0x01000193);
-    }
-    return h;
-  }
-
-  /** Find a cache entry matching the given ids in a hash bucket. */
-  private find_cached(key: number, ids: ComponentID[]): QueryCacheEntry | undefined {
+  /** Find a cache entry matching the given mask in a hash bucket. */
+  private find_cached(key: number, mask: BitSet): QueryCacheEntry | undefined {
     const bucket = this.cache.get(key);
     if (bucket === undefined) return undefined;
     for (let i = 0; i < bucket.length; i++) {
-      const entry = bucket[i];
-      if (entry.query_ids.length === ids.length) {
-        let match = true;
-        for (let j = 0; j < ids.length; j++) {
-          if (entry.query_ids[j] !== ids[j]) { match = false; break; }
-        }
-        if (match) return entry;
-      }
+      if (bucket[i].query_mask.equals(mask)) return bucket[i];
     }
     return undefined;
   }
-
-  private compute_fingerprint(ids: ComponentID[]): number {
-    if (ids.length === 0) return this.store.archetype_count;
-    let sum = 0;
-    for (let i = 0; i < ids.length; i++) {
-      sum += this.store.get_component_archetype_count(ids[i]);
-    }
-    return sum;
-  }
-
 }
