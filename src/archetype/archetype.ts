@@ -1,40 +1,27 @@
 /***
  *
- * Archetype - Dense-storage grouping of entities by component signature
- *
- * An archetype tracks which entities share the same set of components
- * and owns the component data as dense, packed columns indexed by row
- * (0..N-1). Iteration is sequential, maximizing spatial locality.
- *
- * The signature is a BitSet where each set bit corresponds to a
- * ComponentID. This enables O(1) has_component checks and O(words)
- * superset checks for query matching.
- *
- * Entity membership uses a classic sparse-set backed by typed arrays:
- *   - entity_ids (Uint32Array, dense) holds packed EntityIDs
- *   - index_to_row (Int32Array, sparse) maps entity_index → row
- * Uint32Array is required because EntityIDs use unsigned coercion
- * (>>> 0) and can exceed Int32 range. The sentinel EMPTY_ROW = -1
- * marks unused slots since rows are always non-negative.
- *
- * Component data is stored as per-component column groups. Each
- * component gets one TypedArray per field, all indexed by row.
- * Swap-and-pop on remove applies to ALL columns, keeping data dense.
- *
- * Graph edges cache archetype transitions: "if I add/remove component X,
- * which archetype do I end up in?" These are lazily populated by the
- * Store and make repeated transitions O(1). Edges use a Map indexed
- * by ComponentID.
+ * Archetype - Dense-storage grouping of entities by component signature.
+ * See docs/DESIGN.md [opt:2, opt:3, opt:9] for sparse-set, edge cache, and growth strategy.
  *
  ***/
 
-import { Brand, validate_and_cast } from "type_primitives";
+import {
+  Brand,
+  validate_and_cast,
+  is_non_negative_integer,
+} from "type_primitives";
 import type { ComponentID } from "../component/component";
-import type { ComponentSchema, ComponentDef } from "../component/component";
+import type { ComponentSchema, ComponentDef, ColumnsForSchema } from "../component/component";
 import { get_entity_index, type EntityID } from "../entity/entity";
 import { ECS_ERROR, ECSError } from "../utils/error";
+import { grow_int32_array } from "../utils/arrays";
 import type { BitSet } from "type_primitives";
-import { TYPED_ARRAY_MAP, type TypedArray, type TypeTag, type TypedArrayFor } from "type_primitives";
+import {
+  TYPED_ARRAY_MAP,
+  type TypedArray,
+  type TypeTag,
+  type TypedArrayFor,
+} from "type_primitives";
 
 const INITIAL_DENSE_CAPACITY = 16;
 const INITIAL_SPARSE_CAPACITY = 64;
@@ -49,7 +36,7 @@ export type ArchetypeID = Brand<number, "archetype_id">;
 export const as_archetype_id = (value: number) =>
   validate_and_cast<number, ArchetypeID>(
     value,
-    (v) => Number.isInteger(v) && v >= 0,
+    is_non_negative_integer,
     "ArchetypeID must be a non-negative integer",
   );
 
@@ -76,6 +63,7 @@ export interface ArchetypeColumnLayout {
 interface ArchetypeColumnGroup {
   layout: ArchetypeColumnLayout;
   columns: TypedArray[];
+  _record: Record<string, TypedArray> | null; // lazy; null = needs rebuild
 }
 
 //=========================================================
@@ -101,7 +89,11 @@ export class Archetype {
    * @param mask - BitSet representing the component signature
    * @param layouts - Column layouts for each component in this archetype
    */
-  constructor(id: ArchetypeID, mask: BitSet, layouts?: ArchetypeColumnLayout[]) {
+  constructor(
+    id: ArchetypeID,
+    mask: BitSet,
+    layouts?: ArchetypeColumnLayout[],
+  ) {
     this.id = id;
     this.mask = mask;
     this.capacity = INITIAL_DENSE_CAPACITY;
@@ -115,7 +107,7 @@ export class Archetype {
         for (let j = 0; j < layout.field_tags.length; j++) {
           columns[j] = new TYPED_ARRAY_MAP[layout.field_tags[j]](this.capacity);
         }
-        this.column_groups.set(layout.component_id, { layout, columns });
+        this.column_groups.set(layout.component_id, { layout, columns, _record: null });
       }
     }
   }
@@ -136,7 +128,7 @@ export class Archetype {
   }
 
   public has_component(id: ComponentID): boolean {
-    return this.mask.has(id as number);
+    return this.mask.has(id);
   }
 
   /** Check if this archetype's mask is a superset of `required`. */
@@ -160,7 +152,7 @@ export class Archetype {
     def: ComponentDef<S>,
     field: F,
   ): TypedArrayFor<S[F]> {
-    const group = this.column_groups.get(def as ComponentID);
+    const group = this.column_groups.get(def);
     if (__DEV__) {
       if (!group) {
         throw new ECSError(
@@ -181,6 +173,19 @@ export class Archetype {
     return group!.columns[col_idx] as TypedArrayFor<S[F]>;
   }
 
+  /** Get all columns for a component as a typed record. Lazily cached per archetype-component pair. */
+  public get_column_group<S extends ComponentSchema>(def: ComponentDef<S>): ColumnsForSchema<S> {
+    const group = this.column_groups.get(def);
+    if (!group) return {} as ColumnsForSchema<S>; // tag component — no columns
+    if (group._record === null) {
+      const rec: Record<string, TypedArray> = Object.create(null);
+      const { field_names } = group.layout;
+      for (let i = 0; i < field_names.length; i++) rec[field_names[i]] = group.columns[i];
+      group._record = rec;
+    }
+    return group._record as ColumnsForSchema<S>;
+  }
+
   /** Get the row index for an entity_index, or -1 if not present. */
   public get_row(entity_index: number): number {
     if (entity_index >= this.index_to_row.length) return EMPTY_ROW;
@@ -195,7 +200,7 @@ export class Archetype {
   ): void {
     const group = this.column_groups.get(component_id);
     if (!group) return; // tag component — no columns
-    const { field_names, field_index } = group.layout;
+    const { field_names } = group.layout;
     for (let i = 0; i < field_names.length; i++) {
       group.columns[i][row] = values[field_names[i]];
     }
@@ -231,10 +236,7 @@ export class Archetype {
   // Cross-archetype data copy
   //=========================================================
 
-  /**
-   * Copy shared component data from a source archetype row to this
-   * archetype's row. Only copies components that exist in both archetypes.
-   */
+  /** Copy shared component data from source to target row. */
   public copy_shared_from(
     source: Archetype,
     src_row: number,
@@ -262,7 +264,7 @@ export class Archetype {
       this.grow_index_to_row(entity_index + 1);
 
     const row = this.length;
-    this.entity_ids[row] = entity_id as number;
+    this.entity_ids[row] = entity_id;
     this.index_to_row[entity_index] = row;
     this.length++;
     this._cached_list = null;
@@ -271,12 +273,8 @@ export class Archetype {
 
   /**
    * Remove an entity by its index using swap-and-pop.
-   *
-   * Returns the entity_index of the entity that was swapped into the
-   * removed slot, or -1 if the removed entity was the last element
-   * (no swap needed).
-   *
    * Swap-and-pop applies to ALL component columns as well.
+   * Returns the swapped entity_index, or -1 if no swap was needed.
    */
   public remove_entity(entity_index: number): number {
     if (__DEV__) {
@@ -296,10 +294,11 @@ export class Archetype {
 
     this.index_to_row[entity_index] = EMPTY_ROW;
 
+    let swapped_index = -1;
     if (row !== last_row) {
       // Swap entity_ids
       this.entity_ids[row] = this.entity_ids[last_row];
-      const swapped_index = get_entity_index(this.entity_ids[row] as EntityID);
+      swapped_index = get_entity_index(this.entity_ids[row] as EntityID);
       this.index_to_row[swapped_index] = row;
 
       // Swap all component columns
@@ -308,15 +307,11 @@ export class Archetype {
           group.columns[i][row] = group.columns[i][last_row];
         }
       }
-
-      this.length--;
-      this._cached_list = null;
-      return swapped_index;
     }
 
     this.length--;
     this._cached_list = null;
-    return -1;
+    return swapped_index;
   }
 
   //=========================================================
@@ -336,22 +331,24 @@ export class Archetype {
     for (const [, group] of this.column_groups) {
       for (let i = 0; i < group.columns.length; i++) {
         const old = group.columns[i];
-        const next = new TYPED_ARRAY_MAP[group.layout.field_tags[i]](new_capacity);
+        const next = new TYPED_ARRAY_MAP[group.layout.field_tags[i]](
+          new_capacity,
+        );
         next.set(old);
         group.columns[i] = next;
       }
+      group._record = null; // invalidate lazy column record cache
     }
 
     this.capacity = new_capacity;
-    this._cached_list = null;
   }
 
   private grow_index_to_row(min_capacity: number): void {
-    let cap = this.index_to_row.length;
-    while (cap < min_capacity) cap *= 2;
-    const next = new Int32Array(cap).fill(EMPTY_ROW);
-    next.set(this.index_to_row);
-    this.index_to_row = next;
+    this.index_to_row = grow_int32_array(
+      this.index_to_row,
+      min_capacity,
+      EMPTY_ROW,
+    );
   }
 
   //=========================================================

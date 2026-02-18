@@ -18,6 +18,7 @@ import type { ComponentRegistry } from "../component/component_registry";
 import { BitSet } from "type_primitives";
 import { Archetype, as_archetype_id, type ArchetypeColumnLayout, type ArchetypeID } from "./archetype";
 import { ECS_ERROR, ECSError } from "../utils/error";
+import { bucket_push } from "../utils/arrays";
 
 //=========================================================
 // ArchetypeRegistry
@@ -32,7 +33,12 @@ export class ArchetypeRegistry {
   private component_index: Map<ComponentID, Set<ArchetypeID>> = new Map();
 
   // Registered queries: push-based update when new archetypes are created
-  private registered_queries: { mask: BitSet; result: Archetype[] }[] = [];
+  private registered_queries: {
+    include_mask: BitSet;
+    exclude_mask: BitSet | null;
+    any_of_mask: BitSet | null;
+    result: Archetype[];
+  }[] = [];
 
   // The empty archetype (no components)
   private _empty_archetype_id: ArchetypeID;
@@ -59,7 +65,7 @@ export class ArchetypeRegistry {
 
   get(id: ArchetypeID): Archetype {
     if (__DEV__) {
-      if ((id as number) < 0 || (id as number) >= this.archetypes.length) {
+      if (id < 0 || id >= this.archetypes.length) {
         throw new ECSError(
           ECS_ERROR.ARCHETYPE_NOT_FOUND,
           `Archetype with ID ${id} not found`,
@@ -75,11 +81,12 @@ export class ArchetypeRegistry {
   }
 
   /**
-   * Find all archetypes whose mask is a superset of `required`.
+   * Find all archetypes whose mask is a superset of `required`, does not overlap `excluded`,
+   * and overlaps `any_of` (if provided).
    *
    * Uses component_index intersection with smallest-set-first optimization.
    */
-  get_matching(required: BitSet): readonly Archetype[] {
+  get_matching(required: BitSet, excluded?: BitSet, any_of?: BitSet): readonly Archetype[] {
     // Empty mask means match all
     const words = required._words;
     let has_any_bit = false;
@@ -90,10 +97,14 @@ export class ArchetypeRegistry {
       }
     }
     if (!has_any_bit) {
-      return this.archetypes.slice();
+      return this.archetypes.filter(
+        (arch) =>
+          (!excluded || !arch.mask.overlaps(excluded)) &&
+          (!any_of   || arch.mask.overlaps(any_of))
+      );
     }
 
-    // Single pass: find smallest set and detect empties (inlined for_each to avoid closure)
+    // optimization*4 start
     let smallest_set: Set<ArchetypeID> | undefined;
     let has_empty = false;
     for (let wi = 0; wi < words.length; wi++) {
@@ -113,13 +124,16 @@ export class ArchetypeRegistry {
       }
       if (has_empty) break;
     }
+    // optimization*4 end
     if (has_empty || !smallest_set) return [];
 
-    // Intersect: start with smallest set, filter by contains
+    // Intersect: start with smallest set, filter by contains (and optional exclude/any_of)
     const result: Archetype[] = [];
     for (const archetype_id of smallest_set) {
       const arch = this.get(archetype_id);
-      if (arch.matches(required)) {
+      if (arch.matches(required) &&
+          (!excluded || !arch.mask.overlaps(excluded)) &&
+          (!any_of   || arch.mask.overlaps(any_of))) {
         result.push(arch);
       }
     }
@@ -131,9 +145,14 @@ export class ArchetypeRegistry {
    * Register a query for push-based updates. Returns a live array that
    * grows automatically when new matching archetypes are created.
    */
-  register_query(mask: BitSet): Archetype[] {
-    const result = this.get_matching(mask) as Archetype[];
-    this.registered_queries.push({ mask: mask.copy(), result });
+  register_query(include: BitSet, exclude?: BitSet, any_of?: BitSet): Archetype[] {
+    const result = this.get_matching(include, exclude, any_of) as Archetype[];
+    this.registered_queries.push({
+      include_mask: include.copy(),
+      exclude_mask: exclude ? exclude.copy() : null,
+      any_of_mask:  any_of  ? any_of.copy()  : null,
+      result,
+    });
     return result;
   }
 
@@ -178,17 +197,12 @@ export class ArchetypeRegistry {
       }
     });
 
-    // Freeze the mask to signal immutability to V8 JIT
-    Object.freeze(mask);
+    Object.freeze(mask); // optimization*5
 
     const archetype = new Archetype(id, mask, layouts);
 
     this.archetypes.push(archetype);
-    if (bucket !== undefined) {
-      bucket.push(id);
-    } else {
-      this.archetype_map.set(hash, [id]);
-    }
+    bucket_push(this.archetype_map, hash, id);
 
     // Update component index
     mask.for_each((bit) => {
@@ -204,8 +218,11 @@ export class ArchetypeRegistry {
     // Push new archetype to matching registered queries
     const rqs = this.registered_queries;
     for (let i = 0; i < rqs.length; i++) {
-      if (archetype.matches(rqs[i].mask)) {
-        rqs[i].result.push(archetype);
+      const rq = rqs[i];
+      if (archetype.matches(rq.include_mask) &&
+          (!rq.exclude_mask || !archetype.mask.overlaps(rq.exclude_mask)) &&
+          (!rq.any_of_mask  || archetype.mask.overlaps(rq.any_of_mask))) {
+        rq.result.push(archetype);
       }
     }
 

@@ -9,7 +9,7 @@
  *
  ***/
 
-import { Brand, validate_and_cast } from "type_primitives";
+import { Brand, validate_and_cast, is_non_negative_integer } from "type_primitives";
 import type { SystemContext } from "../query/query";
 import type { Store } from "../store/store";
 
@@ -22,7 +22,7 @@ export type SystemID = Brand<number, "system_id">;
 export const as_system_id = (value: number) =>
   validate_and_cast<number, SystemID>(
     value,
-    (v) => Number.isInteger(v) && v >= 0,
+    is_non_negative_integer,
     "SystemID must be a non-negative integer",
   );
 

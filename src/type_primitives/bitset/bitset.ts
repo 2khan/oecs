@@ -36,6 +36,16 @@ export class BitSet {
     this._words[word_index] &= ~(1 << (bit & 31));
   }
 
+  /** Intersection check: does this BitSet share any bit with `other`? */
+  overlaps(other: BitSet): boolean {
+    const a = this._words, b = other._words;
+    const len = a.length < b.length ? a.length : b.length;
+    for (let i = 0; i < len; i++) {
+      if ((a[i] & b[i]) !== 0) return true;
+    }
+    return false;
+  }
+
   /** Superset check: does this BitSet contain all bits set in `other`? */
   contains(other: BitSet): boolean {
     const other_words = other._words;

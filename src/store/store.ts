@@ -1,16 +1,7 @@
 /***
  *
- * Store - Top-level ECS orchestrator
- *
- * The Store owns all registries and delegates archetype operations to
- * ArchetypeRegistry. It is the single entry point for entity/component
- * operations. Archetypes are lazily created when a new component
- * combination appears, never explicitly by external code.
- *
- * Key architectural change: component data now lives in archetype-local
- * dense columns. Archetype transitions copy component data between
- * source and target archetypes. Iteration is sequential within each
- * archetype, maximizing cache locality.
+ * Store - Top-level ECS orchestrator.
+ * Owns all registries; single entry point for entity/component operations.
  *
  ***/
 
@@ -26,6 +17,7 @@ import type {
 import type { Archetype, ArchetypeID } from "../archetype/archetype";
 import { ArchetypeRegistry } from "../archetype/archetype_registry";
 import { ECS_ERROR, ECSError } from "../utils/error";
+import { grow_int32_array } from "../utils/arrays";
 import type { BitSet } from "type_primitives";
 
 //=========================================================
@@ -138,11 +130,7 @@ export class Store {
   //=========================================================
 
   public destroy_entity_deferred(id: EntityID): void {
-    if (__DEV__) {
-      if (!this.entities.is_alive(id)) {
-        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
-      }
-    }
+    if (__DEV__ && !this.entities.is_alive(id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_destroy.push(id);
   }
 
@@ -170,11 +158,7 @@ export class Store {
     def: ComponentDef<S>,
     values: SchemaValues<S>,
   ): void {
-    if (__DEV__) {
-      if (!this.entities.is_alive(entity_id)) {
-        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
-      }
-    }
+    if (__DEV__ && !this.entities.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_add.push({ entity_id, def, values });
   }
 
@@ -182,11 +166,7 @@ export class Store {
     entity_id: EntityID,
     def: ComponentDef<ComponentSchema>,
   ): void {
-    if (__DEV__) {
-      if (!this.entities.is_alive(entity_id)) {
-        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
-      }
-    }
+    if (__DEV__ && !this.entities.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_remove.push({ entity_id, def });
   }
 
@@ -247,7 +227,11 @@ export class Store {
     // Already has component → overwrite data in-place (no transition)
     if (current_arch.has_component(def)) {
       const row = current_arch.get_row(entity_index);
-      current_arch.write_fields(row, def as ComponentID, values as Record<string, number>);
+      current_arch.write_fields(
+        row,
+        def as ComponentID,
+        values as Record<string, number>,
+      );
       return;
     }
 
@@ -268,7 +252,11 @@ export class Store {
     target_arch.copy_shared_from(current_arch, src_row, dst_row);
 
     // Write new component data to target
-    target_arch.write_fields(dst_row, def as ComponentID, values as Record<string, number>);
+    target_arch.write_fields(
+      dst_row,
+      def as ComponentID,
+      values as Record<string, number>,
+    );
 
     // Remove from source archetype (swap-and-pop handles column cleanup)
     current_arch.remove_entity(entity_index);
@@ -314,7 +302,11 @@ export class Store {
 
       // Write all new component data
       for (let i = 0; i < entries.length; i++) {
-        target_arch.write_fields(dst_row, entries[i].def as ComponentID, entries[i].values);
+        target_arch.write_fields(
+          dst_row,
+          entries[i].def as ComponentID,
+          entries[i].values,
+        );
       }
 
       source_arch.remove_entity(entity_index);
@@ -324,7 +316,11 @@ export class Store {
       const arch = this.archetype_registry.get(current_archetype_id);
       const row = arch.get_row(entity_index);
       for (let i = 0; i < entries.length; i++) {
-        arch.write_fields(row, entries[i].def as ComponentID, entries[i].values);
+        arch.write_fields(
+          row,
+          entries[i].def as ComponentID,
+          entries[i].values,
+        );
       }
     }
   }
@@ -408,8 +404,8 @@ export class Store {
     return this.archetype_registry.get_matching(required);
   }
 
-  public register_query(mask: BitSet): Archetype[] {
-    return this.archetype_registry.register_query(mask);
+  public register_query(mask: BitSet, exclude_mask?: BitSet, any_of?: BitSet): Archetype[] {
+    return this.archetype_registry.register_query(mask, exclude_mask, any_of);
   }
 
   get archetype_count(): number {
@@ -437,13 +433,6 @@ export class Store {
   }
 
   private grow_entity_archetype(min_capacity: number): void {
-    let new_capacity = this.entity_archetype.length;
-    while (new_capacity < min_capacity) {
-      new_capacity *= 2;
-    }
-
-    const next = new Int32Array(new_capacity).fill(UNASSIGNED);
-    next.set(this.entity_archetype);
-    this.entity_archetype = next;
+    this.entity_archetype = grow_int32_array(this.entity_archetype, min_capacity, UNASSIGNED);
   }
 }

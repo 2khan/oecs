@@ -1,15 +1,7 @@
 /***
  *
- * Schedule - System execution lifecycle management
- *
- * Systems are grouped into 6 phases (3 startup, 3 update). Within
- * each phase, systems are topologically sorted based on before/after
- * ordering constraints. The sorted order is cached and invalidated
- * when systems are added or removed.
- *
- * Uses Kahn's algorithm with a binary min-heap for O((V+E) log V)
- * topological sort (the old implementation re-sorted an array on
- * every insert, which was O(V² log V)).
+ * Schedule - System execution lifecycle management.
+ * Systems sorted per-phase by topological order. See docs/DESIGN.md [opt:8].
  *
  ***/
 
@@ -307,20 +299,14 @@ export class Schedule {
     return sorted;
   }
 
-  /**
-   * Topological sort using Kahn's algorithm with min-heap.
-   *
-   * Uses insertion order as tiebreaker for deterministic output.
-   * Throws on circular dependencies.
-   */
+  /** Topological sort using Kahn's algorithm with min-heap. Uses insertion order as tiebreaker. */
   private topological_sort(
     nodes: SystemNode[],
     label: SCHEDULE,
   ): SystemDescriptor[] {
     if (nodes.length === 0) return [];
 
-    // Build adjacency list and in-degree count
-    // Edge: A -> B means "A runs before B"
+    // optimization*8 start
     const adjacency = new Map<SystemDescriptor, Set<SystemDescriptor>>();
     const in_degree = new Map<SystemDescriptor, number>();
     const insertion_order = new Map<SystemDescriptor, number>();
@@ -372,6 +358,7 @@ export class Schedule {
         }
       }
     }
+    // optimization*8 end
 
     // Cycle detection
     if (result.length !== nodes.length) {

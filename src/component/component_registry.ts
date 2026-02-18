@@ -47,42 +47,31 @@ export class ComponentRegistry {
 
   /** Get the schema for a registered component. */
   public get_schema(id: ComponentID): ComponentSchema {
-    if (__DEV__) {
-      if (id < 0 || id >= this.component_count) {
-        throw new ECSError(ECS_ERROR.COMPONENT_NOT_REGISTERED);
-      }
-    }
+    if (__DEV__) this._assert_valid(id);
     return this.metas[id].schema;
   }
 
   /** Get field names for a registered component. */
   public get_field_names(id: ComponentID): string[] {
-    if (__DEV__) {
-      if (id < 0 || id >= this.component_count) {
-        throw new ECSError(ECS_ERROR.COMPONENT_NOT_REGISTERED);
-      }
-    }
+    if (__DEV__) this._assert_valid(id);
     return this.metas[id].field_names;
   }
 
   /** Get field type tags for a registered component. */
   public get_field_tags(id: ComponentID): TypeTag[] {
-    if (__DEV__) {
-      if (id < 0 || id >= this.component_count) {
-        throw new ECSError(ECS_ERROR.COMPONENT_NOT_REGISTERED);
-      }
-    }
+    if (__DEV__) this._assert_valid(id);
     return this.metas[id].field_tags;
   }
 
   /** Get field name → index mapping for a registered component. */
   public get_field_index(id: ComponentID): Record<string, number> {
-    if (__DEV__) {
-      if (id < 0 || id >= this.component_count) {
-        throw new ECSError(ECS_ERROR.COMPONENT_NOT_REGISTERED);
-      }
-    }
+    if (__DEV__) this._assert_valid(id);
     return this.metas[id].field_index;
+  }
+
+  private _assert_valid(id: ComponentID): void {
+    if (id < 0 || id >= this.component_count)
+      throw new ECSError(ECS_ERROR.COMPONENT_NOT_REGISTERED);
   }
 
   //=========================================================

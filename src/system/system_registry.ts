@@ -31,16 +31,10 @@ export class SystemRegistry {
    * Register a system and assign it a SystemID.
    * Returns a frozen SystemDescriptor - the identity handle.
    */
-  register(config: SystemConfig): SystemDescriptor {
+  public register(config: SystemConfig): SystemDescriptor {
     const id = as_system_id(this.next_id++);
 
-    const descriptor: SystemDescriptor = Object.freeze({
-      id,
-      fn: config.fn,
-      on_added: config.on_added,
-      on_removed: config.on_removed,
-      dispose: config.dispose,
-    });
+    const descriptor: SystemDescriptor = Object.freeze({ id, ...config });
 
     this.systems.set(id, descriptor);
     return descriptor;
@@ -49,7 +43,7 @@ export class SystemRegistry {
   /**
    * Get a system descriptor by ID.
    */
-  get(id: SystemID): SystemDescriptor {
+  public get(id: SystemID): SystemDescriptor {
     const descriptor = this.systems.get(id);
     if (__DEV__) {
       if (!descriptor) {
@@ -65,7 +59,7 @@ export class SystemRegistry {
   /**
    * Remove a system by ID. Calls on_removed if defined.
    */
-  remove(id: SystemID): void {
+  public remove(id: SystemID): void {
     const descriptor = this.systems.get(id);
     if (!descriptor) return;
 
@@ -77,7 +71,7 @@ export class SystemRegistry {
    * Initialize all registered systems with the store reference.
    * Calls on_added(store) on every system.
    */
-  init_all(store: Store): void {
+  public init_all(store: Store): void {
     for (const descriptor of this.systems.values()) {
       descriptor.on_added?.(store);
     }
@@ -87,7 +81,7 @@ export class SystemRegistry {
    * Dispose all systems. Calls dispose() then on_removed() on each,
    * then clears the registry.
    */
-  dispose_all(): void {
+  public dispose_all(): void {
     for (const descriptor of this.systems.values()) {
       descriptor.dispose?.();
       descriptor.on_removed?.();
@@ -98,14 +92,14 @@ export class SystemRegistry {
   /**
    * Get all registered system descriptors.
    */
-  get_all(): SystemDescriptor[] {
+  public get_all(): SystemDescriptor[] {
     return [...this.systems.values()];
   }
 
   /**
    * Number of registered systems.
    */
-  get count(): number {
+  public get count(): number {
     return this.systems.size;
   }
 }

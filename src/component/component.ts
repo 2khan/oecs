@@ -13,8 +13,8 @@
  *
  ***/
 
-import { Brand, validate_and_cast } from "type_primitives";
-import type { TypeTag } from "type_primitives";
+import { Brand, validate_and_cast, is_non_negative_integer } from "type_primitives";
+import type { TypeTag, TypedArrayFor } from "type_primitives";
 
 //=========================================================
 // ComponentID
@@ -23,7 +23,7 @@ export type ComponentID = Brand<number, "component_id">;
 export const as_component_id = (value: number) =>
   validate_and_cast<number, ComponentID>(
     value,
-    (v) => Number.isInteger(v) && v >= 0,
+    is_non_negative_integer,
     "ComponentID must be a non-negative integer",
   );
 
@@ -37,6 +37,11 @@ export type ComponentSchema = Record<string, TypeTag>;
 /** Maps a schema to its JS-side value object. All typed array values are numbers. */
 export type SchemaValues<S extends ComponentSchema> = {
   [K in keyof S]: number;
+};
+
+/** Maps a schema to a record of typed arrays — one per field. */
+export type ColumnsForSchema<S extends ComponentSchema> = {
+  readonly [K in keyof S & string]: TypedArrayFor<S[K]>
 };
 
 //=========================================================

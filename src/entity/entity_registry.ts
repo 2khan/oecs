@@ -1,33 +1,7 @@
 /***
  *
- * EntityRegistry - Allocates and recycles generational entity IDs
- *
- * The registry is, in essence, a seat-assignment desk for the theatre
- * described in entity.ts. It hands out seat numbers (indices) to new
- * arrivals and, when someone leaves, puts that seat back on a "free"
- * pile so the next arrival can reuse it - with a bumped generation so
- * any ticket stubs from the previous occupant are recognisably stale.
- *
- * Internal state:
- *
- *   generations    - A Uint16Array with one entry per seat. Stores the
- *                    current generation for that index as an unsigned
- *                    16-bit integer (max 65535, well above the 12-bit
- *                    MAX_GENERATION of 4095). The buffer starts at INITIAL_CAPACITY
- *                    and doubles when full, so we never pay for
- *                    per-element boxing or GC pressure on this hot path.
- *
- *   high_water     - The number of index slots that have ever been
- *                    allocated. Everything below this mark in the
- *                    generations buffer holds a meaningful value;
- *                    everything at or above is spare capacity.
- *
- *   free_indices[] - A LIFO stack of seats whose previous occupant has
- *                    left. We pop from here first before growing the
- *                    high-water mark, keeping memory compact.
- *
- *   alive_count    - How many entities are currently alive. Incremented
- *                    on create, decremented on destroy.
+ * EntityRegistry - Allocates and recycles generational entity IDs.
+ * See docs/DESIGN.md [opt:1, opt:9] for ID layout and growth strategy.
  *
  ***/
 
@@ -138,14 +112,7 @@ export class EntityRegistry {
   // Internal
   //=========================================================
 
-  /**
-   * Double the backing buffer.
-   *
-   * Uint16Array is fixed-size, so when we outgrow it we
-   * allocate a new buffer at twice the capacity and copy
-   * the existing data over. The amortised cost of this
-   * doubling strategy is O(1) per create.
-   */
+  // optimization*9
   private grow(): void {
     const next = new Uint16Array(this.generations.length * 2);
     next.set(this.generations);
