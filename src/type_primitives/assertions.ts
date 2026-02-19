@@ -3,14 +3,6 @@ import { TYPE_ERROR, TypeError } from "./error";
 export const is_non_negative_integer = (v: number): boolean =>
   Number.isInteger(v) && v >= 0;
 
-export function assert_non_null<T>(value: T): asserts value is NonNullable<T> {
-  if (__DEV__ && value == null)
-    throw new TypeError(
-      TYPE_ERROR.ASSERTION_FAIL_NON_NULLABLE,
-      "Expected type to be not NULL or UNDEFINED",
-    );
-}
-
 export function assert<T, Result extends T = T>(
   value: T,
   condition: (v: T) => v is Result,

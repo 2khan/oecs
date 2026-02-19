@@ -15,7 +15,13 @@
 import { Store } from "./store/store";
 import { SystemRegistry } from "./system/system_registry";
 import { Schedule, type SCHEDULE } from "./schedule/schedule";
-import { SystemContext } from "./query/query";
+import {
+  SystemContext,
+  Query,
+  QueryBuilder,
+  type QueryResolver,
+  type QueryCacheEntry,
+} from "./query/query";
 import type { EntityID } from "./entity/entity";
 import type {
   ComponentDef,
@@ -24,16 +30,21 @@ import type {
 } from "./component/component";
 import type { SystemConfig, SystemDescriptor } from "./system/system";
 import type { SystemEntry } from "./schedule/schedule";
+import { BitSet } from "type_primitives";
+import { bucket_push } from "./utils/arrays";
 
 //=========================================================
 // World
 //=========================================================
 
-export class World {
+export class World implements QueryResolver {
   private readonly store: Store;
   private readonly system_registry: SystemRegistry;
   private readonly schedule: Schedule;
-  private readonly ctx: SystemContext;
+  readonly ctx: SystemContext;
+
+  private query_cache: Map<number, QueryCacheEntry[]> = new Map();
+  private scratch_mask: BitSet = new BitSet();
 
   constructor() {
     this.store = new Store();
@@ -105,11 +116,108 @@ export class World {
   }
 
   //=========================================================
+  // Query (setup-time)
+  //=========================================================
+
+  query<A extends ComponentDef<ComponentSchema>>(a: A): Query<[A]>;
+  query<A extends ComponentDef<ComponentSchema>,
+        B extends ComponentDef<ComponentSchema>>(a: A, b: B): Query<[A, B]>;
+  query<A extends ComponentDef<ComponentSchema>,
+        B extends ComponentDef<ComponentSchema>,
+        C extends ComponentDef<ComponentSchema>>(a: A, b: B, c: C): Query<[A, B, C]>;
+  query<A extends ComponentDef<ComponentSchema>,
+        B extends ComponentDef<ComponentSchema>,
+        C extends ComponentDef<ComponentSchema>,
+        D extends ComponentDef<ComponentSchema>>(a: A, b: B, c: C, d: D): Query<[A, B, C, D]>;
+  query(...defs: ComponentDef<ComponentSchema>[]): Query<ComponentDef<ComponentSchema>[]>;
+  query(): Query<ComponentDef<ComponentSchema>[]> {
+    const mask = this.scratch_mask;
+    mask._words.fill(0);
+    for (let i = 0; i < arguments.length; i++) {
+      mask.set(arguments[i] as unknown as number);
+    }
+    const defs = Array.from(arguments) as ComponentDef<ComponentSchema>[];
+    return this._resolve_query(mask.copy(), null, null, defs);
+  }
+
+  //=========================================================
+  // QueryResolver implementation
+  //=========================================================
+
+  _resolve_query(
+    include: BitSet,
+    exclude: BitSet | null,
+    any_of: BitSet | null,
+    defs: readonly ComponentDef<ComponentSchema>[],
+  ): Query<any> {
+    const inc_hash = include.hash();
+    const exc_hash = exclude ? exclude.hash() : 0;
+    const any_hash = any_of  ? any_of.hash()  : 0;
+    const key = ((inc_hash ^ Math.imul(exc_hash, 0x9e3779b9))
+                             ^ Math.imul(any_hash, 0x517cc1b7)) | 0;
+
+    const cached = this._find_cached(key, include, exclude, any_of);
+    if (cached !== undefined) return cached.query;
+
+    const result = this.store.register_query(
+      include, exclude ?? undefined, any_of ?? undefined
+    );
+    const q = new Query(
+      result, defs as ComponentDef<ComponentSchema>[], this,
+      include.copy(), exclude?.copy() ?? null, any_of?.copy() ?? null,
+    );
+    bucket_push(this.query_cache, key, {
+      include_mask: include.copy(),
+      exclude_mask: exclude?.copy() ?? null,
+      any_of_mask:  any_of?.copy()  ?? null,
+      query: q,
+    });
+    return q;
+  }
+
+  private _find_cached(
+    key: number,
+    include: BitSet,
+    exclude: BitSet | null,
+    any_of: BitSet | null,
+  ): QueryCacheEntry | undefined {
+    const bucket = this.query_cache.get(key);
+    if (!bucket) return undefined;
+    for (let i = 0; i < bucket.length; i++) {
+      const e = bucket[i];
+      if (!e.include_mask.equals(include)) continue;
+      const exc_ok = exclude === null
+        ? e.exclude_mask === null
+        : e.exclude_mask !== null && e.exclude_mask.equals(exclude);
+      if (!exc_ok) continue;
+      const any_ok = any_of === null
+        ? e.any_of_mask === null
+        : e.any_of_mask !== null && e.any_of_mask.equals(any_of);
+      if (!any_ok) continue;
+      return e;
+    }
+    return undefined;
+  }
+
+  //=========================================================
   // System registration
   //=========================================================
 
-  register_system(config: SystemConfig): SystemDescriptor {
-    return this.system_registry.register(config);
+  register_system<Defs extends readonly ComponentDef<ComponentSchema>[]>(
+    fn: (q: Query<Defs>, ctx: SystemContext, dt: number) => void,
+    query_fn: (qb: QueryBuilder) => Query<Defs>,
+  ): SystemDescriptor;
+  register_system(config: SystemConfig): SystemDescriptor;
+  register_system(
+    fn_or_config: ((q: Query<any>, ctx: SystemContext, dt: number) => void) | SystemConfig,
+    query_fn?: (qb: QueryBuilder) => Query<any>,
+  ): SystemDescriptor {
+    if (typeof fn_or_config === 'function') {
+      const q = query_fn!(new QueryBuilder(this));
+      const ctx = this.ctx;
+      return this.system_registry.register({ fn: (_ctx, dt) => fn_or_config(q, ctx, dt) });
+    }
+    return this.system_registry.register(fn_or_config as SystemConfig);
   }
 
   add_systems(

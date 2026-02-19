@@ -14,12 +14,7 @@ import type { ComponentID } from "../component/component";
 import type { ComponentSchema, ComponentDef, ColumnsForSchema } from "../component/component";
 import { get_entity_index, type EntityID } from "../entity/entity";
 import { ECS_ERROR, ECSError } from "../utils/error";
-import { grow_number_array } from "../utils/arrays";
 import type { BitSet } from "type_primitives";
-
-const INITIAL_DENSE_CAPACITY = 16;
-const INITIAL_SPARSE_CAPACITY = 64;
-const EMPTY_ROW = -1;
 
 //=========================================================
 // ArchetypeID
@@ -56,7 +51,7 @@ export interface ArchetypeColumnLayout {
 interface ArchetypeColumnGroup {
   layout: ArchetypeColumnLayout;
   columns: number[][];
-  _record: Record<string, number[]> | null; // lazy; null = needs rebuild
+  record: Record<string, number[]>;
 }
 
 //=========================================================
@@ -67,21 +62,15 @@ export class Archetype {
   readonly id: ArchetypeID;
   readonly mask: BitSet;
 
-  private entity_ids: number[];
-  private index_to_row: number[];
+  private entity_ids: EntityID[] = [];
   private length: number = 0;
-  private capacity: number;
-  private edges: Map<ComponentID, ArchetypeEdge> = new Map();
-  private _cached_list: number[] | null = null;
+  private edges: ArchetypeEdge[] = [];
 
-  // Component columns: ComponentID → column group
-  private column_groups: Map<ComponentID, ArchetypeColumnGroup> = new Map();
+  // Sparse array indexed by ComponentID — undefined for absent components
+  readonly column_groups: (ArchetypeColumnGroup | undefined)[] = [];
+  // Ordered list of ComponentIDs that have columns — for dense iteration
+  private _column_ids: number[] = [];
 
-  /**
-   * @param id - Archetype identifier
-   * @param mask - BitSet representing the component signature
-   * @param layouts - Column layouts for each component in this archetype
-   */
   constructor(
     id: ArchetypeID,
     mask: BitSet,
@@ -89,18 +78,20 @@ export class Archetype {
   ) {
     this.id = id;
     this.mask = mask;
-    this.capacity = INITIAL_DENSE_CAPACITY;
-    this.entity_ids = new Array(this.capacity).fill(0);
-    this.index_to_row = new Array(INITIAL_SPARSE_CAPACITY).fill(EMPTY_ROW);
 
     if (layouts) {
       for (let i = 0; i < layouts.length; i++) {
         const layout = layouts[i];
         const columns: number[][] = new Array(layout.field_names.length);
         for (let j = 0; j < layout.field_names.length; j++) {
-          columns[j] = new Array(this.capacity).fill(0);
+          columns[j] = [];
         }
-        this.column_groups.set(layout.component_id, { layout, columns, _record: null });
+        const record: Record<string, number[]> = Object.create(null);
+        for (let k = 0; k < layout.field_names.length; k++) {
+          record[layout.field_names[k]] = columns[k];
+        }
+        this.column_groups[layout.component_id as number] = { layout, columns, record };
+        this._column_ids.push(layout.component_id as number);
       }
     }
   }
@@ -113,11 +104,9 @@ export class Archetype {
     return this.length;
   }
 
-  public get entity_list(): number[] {
-    if (this._cached_list === null) {
-      this._cached_list = this.entity_ids.slice(0, this.length);
-    }
-    return this._cached_list;
+  /** Live view of entity IDs — valid indices 0..entity_count-1. Do not mutate. */
+  public get entity_list(): readonly EntityID[] {
+    return this.entity_ids;
   }
 
   public has_component(id: ComponentID): boolean {
@@ -129,13 +118,6 @@ export class Archetype {
     return this.mask.contains(required);
   }
 
-  public has_entity(entity_index: number): boolean {
-    return (
-      entity_index < this.index_to_row.length &&
-      this.index_to_row[entity_index] !== EMPTY_ROW
-    );
-  }
-
   //=========================================================
   // Column data access
   //=========================================================
@@ -145,7 +127,7 @@ export class Archetype {
     def: ComponentDef<S>,
     field: F,
   ): number[] {
-    const group = this.column_groups.get(def);
+    const group = this.column_groups[def as unknown as number];
     if (__DEV__) {
       if (!group) {
         throw new ECSError(
@@ -166,23 +148,11 @@ export class Archetype {
     return group!.columns[col_idx];
   }
 
-  /** Get all columns for a component as a typed record. Lazily cached per archetype-component pair. */
+  /** Get all columns for a component as a typed record. */
   public get_column_group<S extends ComponentSchema>(def: ComponentDef<S>): ColumnsForSchema<S> {
-    const group = this.column_groups.get(def);
-    if (!group) return {} as ColumnsForSchema<S>; // tag component — no columns
-    if (group._record === null) {
-      const rec: Record<string, number[]> = Object.create(null);
-      const { field_names } = group.layout;
-      for (let i = 0; i < field_names.length; i++) rec[field_names[i]] = group.columns[i];
-      group._record = rec;
-    }
-    return group._record as ColumnsForSchema<S>;
-  }
-
-  /** Get the row index for an entity_index, or -1 if not present. */
-  public get_row(entity_index: number): number {
-    if (entity_index >= this.index_to_row.length) return EMPTY_ROW;
-    return this.index_to_row[entity_index];
+    const group = this.column_groups[def as unknown as number];
+    if (!group) return {} as ColumnsForSchema<S>;
+    return group.record as ColumnsForSchema<S>;
   }
 
   /** Write all fields for a component at a given row. */
@@ -191,8 +161,8 @@ export class Archetype {
     component_id: ComponentID,
     values: Record<string, number>,
   ): void {
-    const group = this.column_groups.get(component_id);
-    if (!group) return; // tag component — no columns
+    const group = this.column_groups[component_id as number];
+    if (!group) return;
     const { field_names } = group.layout;
     for (let i = 0; i < field_names.length; i++) {
       group.columns[i][row] = values[field_names[i]];
@@ -205,24 +175,11 @@ export class Archetype {
     component_id: ComponentID,
     field: string,
   ): number {
-    const group = this.column_groups.get(component_id);
+    const group = this.column_groups[component_id as number];
     if (!group) return NaN;
     const col_idx = group.layout.field_index[field];
     if (col_idx === undefined) return NaN;
     return group.columns[col_idx][row];
-  }
-
-  /** Copy all fields for a component from src_row to dst_row (within same archetype). */
-  public copy_row(
-    component_id: ComponentID,
-    dst_row: number,
-    src_row: number,
-  ): void {
-    const group = this.column_groups.get(component_id);
-    if (!group) return;
-    for (let i = 0; i < group.columns.length; i++) {
-      group.columns[i][dst_row] = group.columns[i][src_row];
-    }
   }
 
   //=========================================================
@@ -235,11 +192,15 @@ export class Archetype {
     src_row: number,
     dst_row: number,
   ): void {
-    for (const [comp_id, dst_group] of this.column_groups) {
-      const src_group = source.column_groups.get(comp_id);
+    const src_groups = source.column_groups;
+    const ids = this._column_ids;
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const src_group = src_groups[id];
       if (!src_group) continue;
-      for (let i = 0; i < dst_group.columns.length; i++) {
-        dst_group.columns[i][dst_row] = src_group.columns[i][src_row];
+      const dst_group = this.column_groups[id]!;
+      for (let j = 0; j < dst_group.columns.length; j++) {
+        dst_group.columns[j][dst_row] = src_group.columns[j][src_row];
       }
     }
   }
@@ -250,90 +211,53 @@ export class Archetype {
 
   /**
    * Add an entity to this archetype. Returns the assigned row.
+   * Store is responsible for tracking entity_index → row.
    */
-  public add_entity(entity_id: EntityID, entity_index: number): number {
-    if (this.length >= this.capacity) this.grow();
-    if (entity_index >= this.index_to_row.length)
-      this.grow_index_to_row(entity_index + 1);
-
+  public add_entity(entity_id: EntityID): number {
     const row = this.length;
-    this.entity_ids[row] = entity_id;
-    this.index_to_row[entity_index] = row;
+    this.entity_ids.push(entity_id);
+    const ids = this._column_ids;
+    for (let i = 0; i < ids.length; i++) {
+      const group = this.column_groups[ids[i]]!;
+      for (let j = 0; j < group.columns.length; j++) {
+        group.columns[j].push(0);
+      }
+    }
     this.length++;
-    this._cached_list = null;
     return row;
   }
 
   /**
-   * Remove an entity by its index using swap-and-pop.
-   * Swap-and-pop applies to ALL component columns as well.
-   * Returns the swapped entity_index, or -1 if no swap was needed.
+   * Remove the entity at `row` via swap-and-pop.
+   * Returns the entity_index of the entity swapped into `row`, or -1 if no swap.
+   * Store must update entity_row for the swapped entity.
    */
-  public remove_entity(entity_index: number): number {
-    if (__DEV__) {
-      if (
-        entity_index >= this.index_to_row.length ||
-        this.index_to_row[entity_index] === EMPTY_ROW
-      ) {
-        throw new ECSError(
-          ECS_ERROR.ENTITY_NOT_IN_ARCHETYPE,
-          `Entity index ${entity_index} is not in archetype ${this.id}`,
-        );
-      }
-    }
-
-    const row = this.index_to_row[entity_index];
+  public remove_entity(row: number): number {
     const last_row = this.length - 1;
+    let swapped_entity_index = -1;
 
-    this.index_to_row[entity_index] = EMPTY_ROW;
-
-    let swapped_index = -1;
     if (row !== last_row) {
-      // Swap entity_ids
       this.entity_ids[row] = this.entity_ids[last_row];
-      swapped_index = get_entity_index(this.entity_ids[row] as EntityID);
-      this.index_to_row[swapped_index] = row;
-
-      // Swap all component columns
-      for (const [, group] of this.column_groups) {
-        for (let i = 0; i < group.columns.length; i++) {
-          group.columns[i][row] = group.columns[i][last_row];
+      swapped_entity_index = get_entity_index(this.entity_ids[row]);
+      const ids = this._column_ids;
+      for (let i = 0; i < ids.length; i++) {
+        const group = this.column_groups[ids[i]]!;
+        for (let j = 0; j < group.columns.length; j++) {
+          group.columns[j][row] = group.columns[j][last_row];
         }
       }
     }
 
-    this.length--;
-    this._cached_list = null;
-    return swapped_index;
-  }
-
-  //=========================================================
-  // Growth helpers
-  //=========================================================
-
-  /** Grow entity_ids and ALL component columns together. */
-  private grow(): void {
-    const new_capacity = this.capacity * 2;
-
-    const next_ids = new Array(new_capacity).fill(0);
-    for (let i = 0; i < this.length; i++) next_ids[i] = this.entity_ids[i];
-    this.entity_ids = next_ids;
-
-    for (const [, group] of this.column_groups) {
-      for (let i = 0; i < group.columns.length; i++) {
-        const old = group.columns[i];
-        const next = new Array(new_capacity).fill(0);
-        for (let j = 0; j < old.length; j++) next[j] = old[j];
-        group.columns[i] = next;
+    this.entity_ids.pop();
+    const ids = this._column_ids;
+    for (let i = 0; i < ids.length; i++) {
+      const group = this.column_groups[ids[i]]!;
+      for (let j = 0; j < group.columns.length; j++) {
+        group.columns[j].pop();
       }
-      group._record = null; // invalidate lazy column record cache
     }
-
-    this.capacity = new_capacity;
-  }
-
-  private grow_index_to_row(min_capacity: number): void {
-    this.index_to_row = grow_number_array(this.index_to_row, min_capacity, EMPTY_ROW);
+    this.length--;
+    return swapped_entity_index;
   }
 
   //=========================================================
@@ -341,10 +265,10 @@ export class Archetype {
   //=========================================================
 
   public get_edge(component_id: ComponentID): ArchetypeEdge | undefined {
-    return this.edges.get(component_id);
+    return this.edges[component_id];
   }
 
   public set_edge(component_id: ComponentID, edge: ArchetypeEdge): void {
-    this.edges.set(component_id, edge);
+    this.edges[component_id] = edge;
   }
 }

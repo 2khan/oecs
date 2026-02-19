@@ -427,8 +427,8 @@ describe("query and iteration", () => {
 
     let result: unknown;
     const sys = w.register_system({
-      fn(ctx) {
-        for (let i = 0; i < 10_000; i++) result = ctx.query(Pos, Vel);
+      fn(_ctx) {
+        for (let i = 0; i < 10_000; i++) result = w.query(Pos, Vel);
       },
     });
     w.add_systems(SCHEDULE.STARTUP, sys);
@@ -449,8 +449,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(defs[0], defs[1]);
+      fn(_ctx) {
+        w.query(defs[0], defs[1]);
       },
     });
     w.add_systems(SCHEDULE.STARTUP, sys);
@@ -474,8 +474,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(Shared1, Shared2);
+      fn(_ctx) {
+        w.query(Shared1, Shared2);
       },
     });
     w.add_systems(SCHEDULE.STARTUP, sys);
@@ -499,8 +499,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(...shared);
+      fn(_ctx) {
+        w.query(...shared);
       },
     });
     w.add_systems(SCHEDULE.STARTUP, sys);
@@ -518,8 +518,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(Pos, Vel);
+      fn(_ctx) {
+        const archetypes = w.query(Pos, Vel);
         for (const arch of archetypes) {
           const px = arch.get_column(Pos, "x");
           const py = arch.get_column(Pos, "y");
@@ -548,8 +548,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(...defs);
+      fn(_ctx) {
+        const archetypes = w.query(...defs);
         for (const arch of archetypes) {
           const cols = defs.map((d) => arch.get_column(d, "a"));
           for (let i = 0; i < arch.entity_count; i++) {
@@ -574,8 +574,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(...defs);
+      fn(_ctx) {
+        const archetypes = w.query(...defs);
         for (const arch of archetypes) {
           const cols = defs.map((d) => arch.get_column(d, "a"));
           for (let i = 0; i < arch.entity_count; i++) {
@@ -599,8 +599,8 @@ describe("query and iteration", () => {
     }
 
     const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(Pos, Vel);
+      fn(_ctx) {
+        const archetypes = w.query(Pos, Vel);
         for (const arch of archetypes) {
           const px = arch.get_column(Pos, "x");
           const py = arch.get_column(Pos, "y");
@@ -633,8 +633,8 @@ describe("frame_1_system_10k", () => {
   }
 
   const sys = w.register_system({
-    fn(ctx, _dt) {
-      const archetypes = ctx.query(Pos, Vel);
+    fn(_ctx, _dt) {
+      const archetypes = w.query(Pos, Vel);
       for (const arch of archetypes) {
         const px = arch.get_column(Pos, "x");
         const vx = arch.get_column(Vel, "vx");
@@ -666,8 +666,8 @@ describe("frame_3_systems_10k", () => {
 
   const make_sys = (...q: ComponentDef<ComponentSchema>[]) =>
     w.register_system({
-      fn(ctx, _dt) {
-        const archetypes = ctx.query(...q);
+      fn(_ctx, _dt) {
+        const archetypes = w.query(...q);
         for (const arch of archetypes) {
           const col = arch.get_column(q[0], "x" as never);
           for (let i = 0; i < arch.entity_count; i++) {
@@ -703,10 +703,10 @@ describe("frame_5_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -737,10 +737,10 @@ describe("frame_10_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -771,10 +771,10 @@ describe("frame_25_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -805,10 +805,10 @@ describe("frame_50_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -839,10 +839,10 @@ describe("frame_100_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -873,10 +873,10 @@ describe("frame_200_systems_10k", () => {
 
   const systems = defs.map((_, si) =>
     w.register_system({
-      fn(ctx, _dt) {
+      fn(_ctx, _dt) {
         const a = defs[si];
         const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
+        const archetypes = w.query(a, b);
         for (const arch of archetypes) {
           const col = arch.get_column(a, "a");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -909,8 +909,8 @@ describe("frame_with_structural_churn", () => {
 
   for (let s = 0; s < 100; s++) {
     const sys = w.register_system({
-      fn(ctx, _dt) {
-        const archetypes = ctx.query(Pos, Vel);
+      fn(_ctx, _dt) {
+        const archetypes = w.query(Pos, Vel);
         for (const arch of archetypes) {
           const px = arch.get_column(Pos, "x");
           const vx = arch.get_column(Vel, "vx");

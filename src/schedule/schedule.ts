@@ -60,90 +60,6 @@ interface SystemNode {
 }
 
 //=========================================================
-// Min-heap (keyed by insertion order)
-//=========================================================
-
-class MinHeap {
-  private data: SystemDescriptor[] = [];
-  private order_map: Map<SystemDescriptor, number>;
-
-  constructor(order_map: Map<SystemDescriptor, number>) {
-    this.order_map = order_map;
-  }
-
-  get size(): number {
-    return this.data.length;
-  }
-
-  push(item: SystemDescriptor): void {
-    this.data.push(item);
-    this.sift_up(this.data.length - 1);
-  }
-
-  pop(): SystemDescriptor | undefined {
-    if (this.data.length === 0) return undefined;
-    const top = this.data[0];
-    const last = this.data.pop()!;
-    if (this.data.length > 0) {
-      this.data[0] = last;
-      this.sift_down(0);
-    }
-    return top;
-  }
-
-  private key(item: SystemDescriptor): number {
-    return this.order_map.get(item)!;
-  }
-
-  private sift_up(i: number): void {
-    while (i > 0) {
-      const parent = (i - 1) >>> 1;
-      if (this.key(this.data[i]) < this.key(this.data[parent])) {
-        this.swap(i, parent);
-        i = parent;
-      } else {
-        break;
-      }
-    }
-  }
-
-  private sift_down(i: number): void {
-    const n = this.data.length;
-    while (true) {
-      let smallest = i;
-      const left = 2 * i + 1;
-      const right = 2 * i + 2;
-
-      if (
-        left < n &&
-        this.key(this.data[left]) < this.key(this.data[smallest])
-      ) {
-        smallest = left;
-      }
-      if (
-        right < n &&
-        this.key(this.data[right]) < this.key(this.data[smallest])
-      ) {
-        smallest = right;
-      }
-
-      if (smallest !== i) {
-        this.swap(i, smallest);
-        i = smallest;
-      } else {
-        break;
-      }
-    }
-  }
-
-  private swap(a: number, b: number): void {
-    const tmp = this.data[a];
-    this.data[a] = this.data[b];
-    this.data[b] = tmp;
-  }
-}
-
-//=========================================================
 // Schedule
 //=========================================================
 
@@ -171,7 +87,8 @@ export class Schedule {
     ...entries: (SystemDescriptor | SystemEntry)[]
   ): void {
     for (const entry of entries) {
-      const { descriptor, ordering } = this.normalize_entry(entry);
+      const descriptor = "system" in entry ? entry.system : entry;
+      const ordering   = "system" in entry ? entry.ordering : undefined;
 
       if (__DEV__) {
         if (this.system_index.has(descriptor)) {
@@ -299,14 +216,13 @@ export class Schedule {
     return sorted;
   }
 
-  /** Topological sort using Kahn's algorithm with min-heap. Uses insertion order as tiebreaker. */
+  /** Topological sort using Kahn's algorithm. Uses insertion order as tiebreaker. */
   private topological_sort(
     nodes: SystemNode[],
     label: SCHEDULE,
   ): SystemDescriptor[] {
     if (nodes.length === 0) return [];
 
-    // optimization*8 start
     const adjacency = new Map<SystemDescriptor, Set<SystemDescriptor>>();
     const in_degree = new Map<SystemDescriptor, number>();
     const insertion_order = new Map<SystemDescriptor, number>();
@@ -335,30 +251,24 @@ export class Schedule {
       }
     }
 
-    // Kahn's algorithm with min-heap (keyed by insertion order)
-    const heap = new MinHeap(insertion_order);
-
+    let ready: SystemDescriptor[] = [];
     for (const node of nodes) {
-      if (in_degree.get(node.descriptor) === 0) {
-        heap.push(node.descriptor);
-      }
+      if (in_degree.get(node.descriptor) === 0) ready.push(node.descriptor);
     }
+    ready.sort((a, b) => insertion_order.get(a)! - insertion_order.get(b)!);
 
     const result: SystemDescriptor[] = [];
 
-    while (heap.size > 0) {
-      const current = heap.pop()!;
+    while (ready.length > 0) {
+      const current = ready.shift()!;
       result.push(current);
-
       for (const neighbor of adjacency.get(current)!) {
-        const new_degree = in_degree.get(neighbor)! - 1;
-        in_degree.set(neighbor, new_degree);
-        if (new_degree === 0) {
-          heap.push(neighbor);
-        }
+        const d = in_degree.get(neighbor)! - 1;
+        in_degree.set(neighbor, d);
+        if (d === 0) ready.push(neighbor);
       }
+      ready.sort((a, b) => insertion_order.get(a)! - insertion_order.get(b)!);
     }
-    // optimization*8 end
 
     // Cycle detection
     if (result.length !== nodes.length) {
@@ -376,13 +286,4 @@ export class Schedule {
     return result;
   }
 
-  private normalize_entry(entry: SystemDescriptor | SystemEntry): {
-    descriptor: SystemDescriptor;
-    ordering?: SystemOrdering;
-  } {
-    if ("system" in entry) {
-      return { descriptor: entry.system, ordering: entry.ordering };
-    }
-    return { descriptor: entry };
-  }
 }

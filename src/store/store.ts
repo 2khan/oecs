@@ -1,72 +1,89 @@
 /***
  *
  * Store - Top-level ECS orchestrator.
- * Owns all registries; single entry point for entity/component operations.
+ * Owns all state: entity ID management, component metadata, and archetypes.
  *
  ***/
 
-import { EntityRegistry } from "../entity/entity_registry";
-import { ComponentRegistry } from "../component/component_registry";
-import { get_entity_index, type EntityID } from "../entity/entity";
-import type {
-  ComponentDef,
-  ComponentID,
-  ComponentSchema,
-  SchemaValues,
+import {
+  get_entity_index,
+  get_entity_generation,
+  create_entity_id,
+  MAX_GENERATION,
+  type EntityID,
+} from "../entity/entity";
+import {
+  as_component_id,
+  type ComponentDef,
+  type ComponentID,
+  type ComponentSchema,
+  type SchemaValues,
 } from "../component/component";
+import { unsafe_cast } from "type_primitives";
 import type { Archetype, ArchetypeID } from "../archetype/archetype";
-import { ArchetypeRegistry } from "../archetype/archetype_registry";
+import { ArchetypeRegistry, type ComponentMeta } from "../archetype/archetype_registry";
 import { ECS_ERROR, ECSError } from "../utils/error";
-import { grow_number_array } from "../utils/arrays";
 import type { BitSet } from "type_primitives";
 
 //=========================================================
 // Constants
 //=========================================================
 
-const INITIAL_ENTITY_ARCHETYPE_CAPACITY = 64;
 const UNASSIGNED = -1;
-
-//=========================================================
-// Deferred structural change types
-//=========================================================
-
-interface PendingAdd {
-  entity_id: EntityID;
-  def: ComponentDef<ComponentSchema>;
-  values: Record<string, number>;
-}
-
-interface PendingRemove {
-  entity_id: EntityID;
-  def: ComponentDef<ComponentSchema>;
-}
+const INITIAL_CAPACITY = 256;
 
 //=========================================================
 // Store
 //=========================================================
 
 export class Store {
-  private entities: EntityRegistry;
-  private components: ComponentRegistry;
+  // Entity ID management (was EntityRegistry)
+  private entity_generations: number[] = [];
+  private entity_high_water = 0;
+  private entity_free_indices: number[] = [];
+  private entity_alive_count = 0;
+
+  // Component metadata (was ComponentRegistry)
+  private component_metas: ComponentMeta[] = [];
+  private component_count = 0;
+
   private archetype_registry: ArchetypeRegistry;
 
-  // Entity → archetype mapping
-  // number[] indexed by entity_index. Value = ArchetypeID or -1 (unassigned).
-  private entity_archetype: number[];
+  // entity_index → ArchetypeID (-1 = unassigned). Grown geometrically.
+  private entity_archetype: Int32Array = new Int32Array(INITIAL_CAPACITY).fill(UNASSIGNED);
+  // entity_index → row within its archetype (-1 = unassigned). Grown geometrically.
+  private entity_row: Int32Array = new Int32Array(INITIAL_CAPACITY).fill(UNASSIGNED);
+  private entity_capacity: number = INITIAL_CAPACITY;
 
-  // Deferred destruction buffer — filled by systems, flushed between phases
+  // Deferred destruction buffer
   private pending_destroy: EntityID[] = [];
 
-  // Deferred structural change buffers — filled by systems, flushed between phases
-  private pending_add: PendingAdd[] = [];
-  private pending_remove: PendingRemove[] = [];
+  // Deferred structural change buffers — flat parallel arrays (no per-op allocation)
+  private pending_add_ids: EntityID[] = [];
+  private pending_add_defs: ComponentDef<ComponentSchema>[] = [];
+  private pending_add_values: Record<string, number>[] = [];
+  private pending_remove_ids: EntityID[] = [];
+  private pending_remove_defs: ComponentDef<ComponentSchema>[] = [];
 
   constructor() {
-    this.entities = new EntityRegistry();
-    this.components = new ComponentRegistry();
-    this.archetype_registry = new ArchetypeRegistry(this.components);
-    this.entity_archetype = new Array(INITIAL_ENTITY_ARCHETYPE_CAPACITY).fill(UNASSIGNED);
+    this.archetype_registry = new ArchetypeRegistry(this.component_metas);
+  }
+
+  //=========================================================
+  // Internal: capacity management
+  //=========================================================
+
+  private ensure_entity_capacity(index: number): void {
+    if (index < this.entity_capacity) return;
+    let cap = this.entity_capacity;
+    while (cap <= index) cap *= 2;
+    const new_arch = new Int32Array(cap).fill(UNASSIGNED);
+    const new_row  = new Int32Array(cap).fill(UNASSIGNED);
+    new_arch.set(this.entity_archetype);
+    new_row.set(this.entity_row);
+    this.entity_archetype = new_arch;
+    this.entity_row = new_row;
+    this.entity_capacity = cap;
   }
 
   //=========================================================
@@ -74,53 +91,63 @@ export class Store {
   //=========================================================
 
   public create_entity(): EntityID {
-    const id = this.entities.create_entity();
-    const index = get_entity_index(id);
+    let index: number;
+    let generation: number;
 
-    if (index >= this.entity_archetype.length) {
-      this.grow_entity_archetype(index + 1);
+    if (this.entity_free_indices.length > 0) {
+      index = this.entity_free_indices.pop()!;
+      generation = this.entity_generations[index];
+    } else {
+      index = this.entity_high_water++;
+      this.entity_generations[index] = 0;
+      generation = 0;
     }
 
-    // Place in empty archetype
+    this.entity_alive_count++;
+    const id = create_entity_id(index, generation);
+
+    this.ensure_entity_capacity(index);
     const empty_id = this.archetype_registry.empty_archetype_id;
     const empty = this.archetype_registry.get(empty_id);
-    empty.add_entity(id, index);
+    const row = empty.add_entity(id);
     this.entity_archetype[index] = empty_id;
+    this.entity_row[index] = row;
 
     return id;
   }
 
   public destroy_entity(id: EntityID): void {
-    if (!this.entities.is_alive(id)) {
+    if (!this.is_alive(id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const index = get_entity_index(id);
-    const archetype_id = this.get_entity_archetype_id(index);
+    const archetype_id = this.entity_archetype[index];
+    const row = this.entity_row[index];
+    const arch = this.archetype_registry.get(archetype_id as ArchetypeID);
+    const swapped_idx = arch.remove_entity(row);
+    if (swapped_idx !== -1) this.entity_row[swapped_idx] = row;
 
-    if (archetype_id === UNASSIGNED) {
-      if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_IN_ARCHETYPE);
-      return;
-    }
-
-    // Remove from archetype membership (swap-and-pop handles column cleanup)
-    const arch = this.archetype_registry.get(archetype_id);
-    arch.remove_entity(index);
-
-    // Clear entity-archetype mapping
     this.entity_archetype[index] = UNASSIGNED;
+    this.entity_row[index] = UNASSIGNED;
 
-    // Destroy in entity registry (bumps generation)
-    this.entities.destroy(id);
+    const generation = get_entity_generation(id);
+    this.entity_generations[index] = (generation + 1) & MAX_GENERATION;
+    this.entity_free_indices.push(index);
+    this.entity_alive_count--;
   }
 
   public is_alive(id: EntityID): boolean {
-    return this.entities.is_alive(id);
+    const index = get_entity_index(id);
+    return (
+      index < this.entity_high_water &&
+      this.entity_generations[index] === get_entity_generation(id)
+    );
   }
 
   public get entity_count(): number {
-    return this.entities.count;
+    return this.entity_alive_count;
   }
 
   //=========================================================
@@ -128,7 +155,7 @@ export class Store {
   //=========================================================
 
   public destroy_entity_deferred(id: EntityID): void {
-    if (__DEV__ && !this.entities.is_alive(id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    if (__DEV__ && !this.is_alive(id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_destroy.push(id);
   }
 
@@ -136,7 +163,7 @@ export class Store {
     const buf = this.pending_destroy;
     if (buf.length === 0) return;
     for (let i = 0; i < buf.length; i++) {
-      if (this.entities.is_alive(buf[i])) {
+      if (this.is_alive(buf[i])) {
         this.destroy_entity(buf[i]);
       }
     }
@@ -156,52 +183,63 @@ export class Store {
     def: ComponentDef<S>,
     values: SchemaValues<S>,
   ): void {
-    if (__DEV__ && !this.entities.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
-    this.pending_add.push({ entity_id, def, values });
+    if (__DEV__ && !this.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    this.pending_add_ids.push(entity_id);
+    this.pending_add_defs.push(def);
+    this.pending_add_values.push(values as Record<string, number>);
   }
 
   public remove_component_deferred(
     entity_id: EntityID,
     def: ComponentDef<ComponentSchema>,
   ): void {
-    if (__DEV__ && !this.entities.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
-    this.pending_remove.push({ entity_id, def });
+    if (__DEV__ && !this.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    this.pending_remove_ids.push(entity_id);
+    this.pending_remove_defs.push(def);
   }
 
   public flush_structural(): void {
-    if (this.pending_add.length === 0 && this.pending_remove.length === 0)
-      return;
+    const n_add = this.pending_add_ids.length;
+    const n_rem = this.pending_remove_ids.length;
+    if (n_add === 0 && n_rem === 0) return;
 
-    // Adds first, then removes
-    const adds = this.pending_add;
-    for (let i = 0; i < adds.length; i++) {
-      if (this.entities.is_alive(adds[i].entity_id)) {
-        this.add_component(adds[i].entity_id, adds[i].def, adds[i].values);
+    for (let i = 0; i < n_add; i++) {
+      if (this.is_alive(this.pending_add_ids[i])) {
+        this.add_component(this.pending_add_ids[i], this.pending_add_defs[i], this.pending_add_values[i]);
       }
     }
-    adds.length = 0;
+    this.pending_add_ids.length = 0;
+    this.pending_add_defs.length = 0;
+    this.pending_add_values.length = 0;
 
-    const removes = this.pending_remove;
-    for (let i = 0; i < removes.length; i++) {
-      if (this.entities.is_alive(removes[i].entity_id)) {
-        this.remove_component(removes[i].entity_id, removes[i].def);
+    for (let i = 0; i < n_rem; i++) {
+      if (this.is_alive(this.pending_remove_ids[i])) {
+        this.remove_component(this.pending_remove_ids[i], this.pending_remove_defs[i]);
       }
     }
-    removes.length = 0;
+    this.pending_remove_ids.length = 0;
+    this.pending_remove_defs.length = 0;
   }
 
   public get pending_structural_count(): number {
-    return this.pending_add.length + this.pending_remove.length;
+    return this.pending_add_ids.length + this.pending_remove_ids.length;
   }
 
   //=========================================================
   // Component registration
   //=========================================================
 
-  public register_component<S extends ComponentSchema>(
-    schema: S,
-  ): ComponentDef<S> {
-    return this.components.register(schema);
+  public register_component<S extends ComponentSchema>(schema: S): ComponentDef<S> {
+    const id = as_component_id(this.component_count++);
+
+    const field_names = Object.keys(schema);
+    const field_index: Record<string, number> = Object.create(null);
+    for (let i = 0; i < field_names.length; i++) {
+      field_index[field_names[i]] = i;
+    }
+    this.component_metas.push({ field_names, field_index });
+
+    return unsafe_cast<ComponentDef<S>>(id);
   }
 
   //=========================================================
@@ -213,112 +251,82 @@ export class Store {
     def: ComponentDef<S>,
     values: SchemaValues<S>,
   ): void {
-    if (!this.entities.is_alive(entity_id)) {
+    if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.get_entity_archetype_id(entity_index);
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
     const current_arch = this.archetype_registry.get(current_archetype_id);
 
-    // Already has component → overwrite data in-place (no transition)
+    // Already has component → overwrite in-place (no transition)
     if (current_arch.has_component(def)) {
-      const row = current_arch.get_row(entity_index);
       current_arch.write_fields(
-        row,
+        this.entity_row[entity_index],
         def as ComponentID,
         values as Record<string, number>,
       );
       return;
     }
 
-    // Resolve target archetype via graph edges
-    const target_archetype_id = this.archetype_registry.resolve_add(
-      current_archetype_id,
-      def,
-    );
+    const target_archetype_id = this.archetype_registry.resolve_add(current_archetype_id, def);
     const target_arch = this.archetype_registry.get(target_archetype_id);
 
-    // Get source row before removing
-    const src_row = current_arch.get_row(entity_index);
+    const src_row = this.entity_row[entity_index];
+    const dst_row = target_arch.add_entity(entity_id);
 
-    // Add entity to target archetype (gets new row)
-    const dst_row = target_arch.add_entity(entity_id, entity_index);
-
-    // Copy shared component data from source to target
     target_arch.copy_shared_from(current_arch, src_row, dst_row);
+    target_arch.write_fields(dst_row, def as ComponentID, values as Record<string, number>);
 
-    // Write new component data to target
-    target_arch.write_fields(
-      dst_row,
-      def as ComponentID,
-      values as Record<string, number>,
-    );
+    const swapped_idx = current_arch.remove_entity(src_row);
+    if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
 
-    // Remove from source archetype (swap-and-pop handles column cleanup)
-    current_arch.remove_entity(entity_index);
-
-    // Update entity-archetype mapping
     this.entity_archetype[entity_index] = target_archetype_id;
+    this.entity_row[entity_index] = dst_row;
   }
 
   public add_components(
     entity_id: EntityID,
-    entries: {
-      def: ComponentDef<ComponentSchema>;
-      values: Record<string, number>;
-    }[],
+    entries: { def: ComponentDef<ComponentSchema>; values: Record<string, number> }[],
   ): void {
-    if (!this.entities.is_alive(entity_id)) {
+    if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const entity_index = get_entity_index(entity_id);
-    let current_archetype_id = this.get_entity_archetype_id(entity_index);
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
 
     // Resolve final archetype through all adds
-    let target_archetype_id = current_archetype_id;
+    let target_archetype_id: ArchetypeID = current_archetype_id;
     for (let i = 0; i < entries.length; i++) {
-      target_archetype_id = this.archetype_registry.resolve_add(
-        target_archetype_id,
-        entries[i].def,
-      );
+      target_archetype_id = this.archetype_registry.resolve_add(target_archetype_id, entries[i].def);
     }
 
-    // Single membership move if archetype changed
     if (target_archetype_id !== current_archetype_id) {
       const source_arch = this.archetype_registry.get(current_archetype_id);
       const target_arch = this.archetype_registry.get(target_archetype_id);
 
-      const src_row = source_arch.get_row(entity_index);
-      const dst_row = target_arch.add_entity(entity_id, entity_index);
+      const src_row = this.entity_row[entity_index];
+      const dst_row = target_arch.add_entity(entity_id);
 
-      // Copy shared component data
       target_arch.copy_shared_from(source_arch, src_row, dst_row);
-
-      // Write all new component data
       for (let i = 0; i < entries.length; i++) {
-        target_arch.write_fields(
-          dst_row,
-          entries[i].def as ComponentID,
-          entries[i].values,
-        );
+        target_arch.write_fields(dst_row, entries[i].def as ComponentID, entries[i].values);
       }
 
-      source_arch.remove_entity(entity_index);
+      const swapped_idx = source_arch.remove_entity(src_row);
+      if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+
       this.entity_archetype[entity_index] = target_archetype_id;
+      this.entity_row[entity_index] = dst_row;
     } else {
       // All components already present — overwrite in-place
       const arch = this.archetype_registry.get(current_archetype_id);
-      const row = arch.get_row(entity_index);
+      const row = this.entity_row[entity_index];
       for (let i = 0; i < entries.length; i++) {
-        arch.write_fields(
-          row,
-          entries[i].def as ComponentID,
-          entries[i].values,
-        );
+        arch.write_fields(row, entries[i].def as ComponentID, entries[i].values);
       }
     }
   }
@@ -327,71 +335,56 @@ export class Store {
     entity_id: EntityID,
     def: ComponentDef<ComponentSchema>,
   ): void {
-    if (!this.entities.is_alive(entity_id)) {
+    if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.get_entity_archetype_id(entity_index);
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
     const current_arch = this.archetype_registry.get(current_archetype_id);
 
-    // Doesn't have component → no-op
-    if (!current_arch.has_component(def)) {
-      return;
-    }
+    if (!current_arch.has_component(def)) return;
 
-    // Resolve target archetype via graph edges
-    const target_archetype_id = this.archetype_registry.resolve_remove(
-      current_archetype_id,
-      def,
-    );
+    const target_archetype_id = this.archetype_registry.resolve_remove(current_archetype_id, def);
     const target_arch = this.archetype_registry.get(target_archetype_id);
 
-    // Get source row before removing
-    const src_row = current_arch.get_row(entity_index);
+    const src_row = this.entity_row[entity_index];
+    const dst_row = target_arch.add_entity(entity_id);
 
-    // Add entity to target archetype
-    const dst_row = target_arch.add_entity(entity_id, entity_index);
-
-    // Copy shared component data (excludes the removed component since target doesn't have it)
     target_arch.copy_shared_from(current_arch, src_row, dst_row);
 
-    // Remove from source archetype
-    current_arch.remove_entity(entity_index);
+    const swapped_idx = current_arch.remove_entity(src_row);
+    if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
 
-    // Update entity-archetype mapping
     this.entity_archetype[entity_index] = target_archetype_id;
+    this.entity_row[entity_index] = dst_row;
   }
 
   public has_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentSchema>,
   ): boolean {
-    if (!this.entities.is_alive(entity_id)) {
+    if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return false;
     }
-
     const entity_index = get_entity_index(entity_id);
-    const archetype_id = this.get_entity_archetype_id(entity_index);
-    const arch = this.archetype_registry.get(archetype_id);
-    return arch.has_component(def);
+    return this.archetype_registry.get(this.entity_archetype[entity_index] as ArchetypeID).has_component(def);
   }
 
   //=========================================================
   // Direct data access
   //=========================================================
 
-  public get_component_registry(): ComponentRegistry {
-    return this.components;
+  public get_entity_archetype(entity_id: EntityID): Archetype {
+    return this.archetype_registry.get(
+      this.entity_archetype[get_entity_index(entity_id)] as ArchetypeID
+    );
   }
 
-  /** Get the archetype an entity currently belongs to. */
-  public get_entity_archetype(entity_id: EntityID): Archetype {
-    const entity_index = get_entity_index(entity_id);
-    const archetype_id = this.get_entity_archetype_id(entity_index);
-    return this.archetype_registry.get(archetype_id);
+  public get_entity_row(entity_id: EntityID): number {
+    return this.entity_row[get_entity_index(entity_id)];
   }
 
   //=========================================================
@@ -410,27 +403,4 @@ export class Store {
     return this.archetype_registry.count;
   }
 
-  public get_component_archetype_count(id: ComponentID): number {
-    return this.archetype_registry.get_component_archetype_count(id);
-  }
-
-  public get_archetype(id: ArchetypeID): Archetype {
-    return this.archetype_registry.get(id);
-  }
-
-  //=========================================================
-  // Internal: entity-archetype mapping
-  //=========================================================
-
-  /**
-   * May return UNASSIGNED (-1) cast as ArchetypeID for destroyed entities.
-   * Callers must guard with is_alive() before using the result as a real ID.
-   */
-  private get_entity_archetype_id(entity_index: number): ArchetypeID {
-    return this.entity_archetype[entity_index] as ArchetypeID;
-  }
-
-  private grow_entity_archetype(min_capacity: number): void {
-    this.entity_archetype = grow_number_array(this.entity_archetype, min_capacity, UNASSIGNED);
-  }
 }

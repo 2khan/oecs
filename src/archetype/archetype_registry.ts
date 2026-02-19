@@ -5,20 +5,25 @@
  * Owns the archetype dense array, BitSet-based dedup map, graph edge
  * resolution, and component index (for query matching).
  *
- * Takes a ComponentRegistry reference to build column layouts for new
- * archetypes based on their component schemas.
- *
- * Store delegates all archetype operations here, keeping itself as a
- * pure orchestrator of registries.
+ * Takes a live ComponentMeta[] reference (owned by Store) to build column
+ * layouts for new archetypes based on their component schemas.
  *
  ***/
 
 import type { ComponentID } from "../component/component";
-import type { ComponentRegistry } from "../component/component_registry";
 import { BitSet } from "type_primitives";
 import { Archetype, as_archetype_id, type ArchetypeColumnLayout, type ArchetypeID } from "./archetype";
 import { ECS_ERROR, ECSError } from "../utils/error";
 import { bucket_push } from "../utils/arrays";
+
+//=========================================================
+// ComponentMeta — minimal schema info needed to build columns
+//=========================================================
+
+export interface ComponentMeta {
+  field_names: string[];
+  field_index: Record<string, number>;
+}
 
 //=========================================================
 // ArchetypeRegistry
@@ -43,11 +48,11 @@ export class ArchetypeRegistry {
   // The empty archetype (no components)
   private _empty_archetype_id: ArchetypeID;
 
-  // Reference to component registry for schema lookups
-  private component_registry: ComponentRegistry;
+  // Live reference to Store's component metadata array
+  private component_metas: ComponentMeta[];
 
-  constructor(component_registry: ComponentRegistry) {
-    this.component_registry = component_registry;
+  constructor(component_metas: ComponentMeta[]) {
+    this.component_metas = component_metas;
     this._empty_archetype_id = this.get_or_create([]);
   }
 
@@ -182,21 +187,19 @@ export class ArchetypeRegistry {
 
     const id = as_archetype_id(this.next_archetype_id++);
 
-    // Build column layouts from component registry schemas
+    // Build column layouts from component metadata
     const layouts: ArchetypeColumnLayout[] = [];
     mask.for_each((bit) => {
       const comp_id = bit as ComponentID;
-      const field_names = this.component_registry.get_field_names(comp_id);
-      if (field_names.length > 0) {
+      const meta = this.component_metas[comp_id as number];
+      if (meta && meta.field_names.length > 0) {
         layouts.push({
           component_id: comp_id,
-          field_names,
-          field_index: this.component_registry.get_field_index(comp_id),
+          field_names: meta.field_names,
+          field_index: meta.field_index,
         });
       }
     });
-
-    Object.freeze(mask); // optimization*5
 
     const archetype = new Archetype(id, mask, layouts);
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ArchetypeRegistry } from "../archetype_registry";
-import { ComponentRegistry } from "../../component/component_registry";
+import { ArchetypeRegistry, type ComponentMeta } from "../archetype_registry";
 import { as_component_id, type ComponentID } from "../../component/component";
 import { BitSet } from "type_primitives";
 
@@ -14,15 +13,18 @@ function make_mask(...ids: number[]): BitSet {
 }
 
 function make_registry_with_components(count: number): {
-  comp_reg: ComponentRegistry;
+  component_metas: ComponentMeta[];
   arch_reg: ArchetypeRegistry;
 } {
-  const comp_reg = new ComponentRegistry();
+  const component_metas: ComponentMeta[] = [];
   for (let i = 0; i < count; i++) {
-    comp_reg.register({ [`f${i}`]: "f32" });
+    const name = `f${i}`;
+    const field_index: Record<string, number> = Object.create(null);
+    field_index[name] = 0;
+    component_metas.push({ field_names: [name], field_index });
   }
-  const arch_reg = new ArchetypeRegistry(comp_reg);
-  return { comp_reg, arch_reg };
+  const arch_reg = new ArchetypeRegistry(component_metas);
+  return { component_metas, arch_reg };
 }
 
 describe("ArchetypeRegistry", () => {
@@ -248,16 +250,21 @@ describe("ArchetypeRegistry", () => {
   //=========================================================
 
   it("new archetypes have columns matching component schemas", () => {
-    const comp_reg = new ComponentRegistry();
-    const Pos = comp_reg.register({ x: "f32", y: "f32" });
-    const arch_reg = new ArchetypeRegistry(comp_reg);
+    const field_index: Record<string, number> = Object.create(null);
+    field_index["x"] = 0;
+    field_index["y"] = 1;
+    const component_metas: ComponentMeta[] = [
+      { field_names: ["x", "y"], field_index },
+    ];
+    const arch_reg = new ArchetypeRegistry(component_metas);
 
-    const id = arch_reg.get_or_create([Pos as ComponentID]);
+    const Pos = as_component_id(0);
+    const id = arch_reg.get_or_create([Pos]);
     const arch = arch_reg.get(id);
 
     // Should be able to get columns
-    const col_x = arch.get_column(Pos, "x");
-    const col_y = arch.get_column(Pos, "y");
+    const col_x = arch.get_column(Pos as any, "x");
+    const col_y = arch.get_column(Pos as any, "y");
     expect(Array.isArray(col_x)).toBe(true);
     expect(Array.isArray(col_y)).toBe(true);
   });

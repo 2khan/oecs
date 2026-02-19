@@ -1,12 +1,7 @@
 /***
  *
- * SystemRegistry - Owns system descriptors and manages lifecycle
- *
- * Follows the same patterns as EntityRegistry and ComponentRegistry:
- * auto-incrementing IDs, dev-mode assertions, single ownership.
- *
- * The registry assigns SystemIDs, calls lifecycle hooks (on_added,
- * on_removed, dispose), and provides lookup by ID.
+ * SystemRegistry - Owns system descriptors and manages lifecycle.
+ * Assigns SystemIDs, calls lifecycle hooks (on_added, on_removed, dispose).
  *
  ***/
 
@@ -34,7 +29,9 @@ export class SystemRegistry {
   public register(config: SystemConfig): SystemDescriptor {
     const id = as_system_id(this.next_id++);
 
-    const descriptor: SystemDescriptor = Object.freeze({ id, ...config });
+    const descriptor: SystemDescriptor = Object.freeze(
+      Object.assign({ id }, config),
+    );
 
     this.systems.set(id, descriptor);
     return descriptor;
