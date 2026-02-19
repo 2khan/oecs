@@ -1,6 +1,6 @@
 /***
  *
- * BitSet - Uint32Array-backed bit set with auto-grow
+ * BitSet - number[]-backed bit set with auto-grow
  *
  * Used as the archetype signature representation. Each bit position
  * corresponds to a ComponentID. Operations like has/set/clear are
@@ -12,10 +12,10 @@
 const INITIAL_WORD_COUNT = 4; // 128 component IDs
 
 export class BitSet {
-  _words: Uint32Array;
+  _words: number[];
 
-  constructor(words?: Uint32Array) {
-    this._words = words ?? new Uint32Array(INITIAL_WORD_COUNT);
+  constructor(words?: number[]) {
+    this._words = words ?? new Array(INITIAL_WORD_COUNT).fill(0);
   }
 
   has(bit: number): boolean {
@@ -34,6 +34,17 @@ export class BitSet {
     const word_index = bit >>> 5;
     if (word_index >= this._words.length) return;
     this._words[word_index] &= ~(1 << (bit & 31));
+  }
+
+  /** Intersection check: does this BitSet share any bit with `other`? */
+  overlaps(other: BitSet): boolean {
+    const a = this._words,
+      b = other._words;
+    const len = a.length < b.length ? a.length : b.length;
+    for (let i = 0; i < len; i++) {
+      if ((a[i] & b[i]) !== 0) return true;
+    }
+    return false;
   }
 
   /** Superset check: does this BitSet contain all bits set in `other`? */
@@ -65,21 +76,21 @@ export class BitSet {
   }
 
   copy(): BitSet {
-    return new BitSet(new Uint32Array(this._words));
+    return new BitSet(this._words.slice());
   }
 
   copy_with_set(bit: number): BitSet {
     const word_index = bit >>> 5;
     const min_len = word_index + 1;
     const len = this._words.length > min_len ? this._words.length : min_len;
-    const words = new Uint32Array(len);
-    words.set(this._words);
+    const words = new Array(len).fill(0);
+    for (let i = 0; i < this._words.length; i++) words[i] = this._words[i];
     words[word_index] |= 1 << (bit & 31);
     return new BitSet(words);
   }
 
   copy_with_clear(bit: number): BitSet {
-    const words = new Uint32Array(this._words);
+    const words = this._words.slice();
     const word_index = bit >>> 5;
     if (word_index < words.length) {
       words[word_index] &= ~(1 << (bit & 31));
@@ -123,8 +134,8 @@ export class BitSet {
   private grow(min_words: number): void {
     let cap = this._words.length;
     while (cap < min_words) cap *= 2;
-    const next = new Uint32Array(cap);
-    next.set(this._words);
+    const next = new Array(cap).fill(0);
+    for (let i = 0; i < this._words.length; i++) next[i] = this._words[i];
     this._words = next;
   }
 }

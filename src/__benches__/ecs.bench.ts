@@ -1,17 +1,15 @@
 import { bench, describe } from "vitest";
 import { World } from "../world";
-import { SCHEDULE } from "../schedule/schedule";
-import type { EntityID } from "../entity/entity";
-import type { ComponentDef, ComponentSchema } from "../component/component";
+import { SCHEDULE } from "../schedule";
+import type { EntityID } from "../entity";
+import type { ComponentDef, ComponentFields } from "../component";
 
 //=========================================================
 // Helpers
 //=========================================================
 
-function make_schema(n: number): ComponentSchema {
-  const s: ComponentSchema = {};
-  for (let i = 0; i < n; i++) s[`f${i}`] = "f32";
-  return s;
+function make_fields(n: number): string[] {
+  return Array.from({ length: n }, (_, i) => `f${i}`);
 }
 
 function make_values(n: number): Record<string, number> {
@@ -50,6 +48,7 @@ describe("entity lifecycle", () => {
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
     for (let i = 0; i < ids.length; i++) w.destroy_entity(ids[i]);
+    w.update(0);
   });
 
   bench("entity_create_destroy_cycle", () => {
@@ -58,6 +57,7 @@ describe("entity lifecycle", () => {
       const ids: EntityID[] = [];
       for (let i = 0; i < 1_000; i++) ids.push(w.create_entity());
       for (let i = 0; i < ids.length; i++) w.destroy_entity(ids[i]);
+      w.update(0);
     }
   });
 });
@@ -67,19 +67,19 @@ describe("entity lifecycle", () => {
 //=========================================================
 
 describe("component operations", () => {
-  const SCHEMAS: ComponentSchema[] = [];
+  const FIELDS: string[][] = [];
   for (let i = 0; i < 100; i++) {
-    SCHEMAS.push(make_schema(1 + (i % 5)));
+    FIELDS.push(make_fields(1 + (i % 5)));
   }
 
   bench("register_100_components", () => {
     const w = new World();
-    for (let i = 0; i < 100; i++) w.register_component(SCHEMAS[i]);
+    for (let i = 0; i < 100; i++) w.register_component(FIELDS[i]);
   });
 
   bench("add_1_component_10k", () => {
     const w = new World();
-    const C = w.register_component({ f0: "f32" });
+    const C = w.register_component(["f0"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
 
@@ -91,7 +91,7 @@ describe("component operations", () => {
   bench("add_5_components_10k", () => {
     const w = new World();
     const defs = Array.from({ length: 5 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -107,7 +107,7 @@ describe("component operations", () => {
   bench("add_10_components_10k", () => {
     const w = new World();
     const defs = Array.from({ length: 10 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -123,7 +123,7 @@ describe("component operations", () => {
   bench("add_20_components_1k", () => {
     const w = new World();
     const defs = Array.from({ length: 20 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -139,7 +139,7 @@ describe("component operations", () => {
   bench("add_50_components_1k", () => {
     const w = new World();
     const defs = Array.from({ length: 50 }, () =>
-      w.register_component(make_schema(1)),
+      w.register_component(make_fields(1)),
     );
     const vals = make_values(1);
     const ids: EntityID[] = [];
@@ -155,7 +155,7 @@ describe("component operations", () => {
   bench("add_100_components_100", () => {
     const w = new World();
     const defs = Array.from({ length: 100 }, () =>
-      w.register_component(make_schema(1)),
+      w.register_component(make_fields(1)),
     );
     const vals = make_values(1);
     const ids: EntityID[] = [];
@@ -171,7 +171,7 @@ describe("component operations", () => {
   bench("remove_1_from_10_10k", () => {
     const w = new World();
     const defs = Array.from({ length: 10 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -189,7 +189,7 @@ describe("component operations", () => {
   bench("remove_5_from_10_5k", () => {
     const w = new World();
     const defs = Array.from({ length: 10 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -209,7 +209,7 @@ describe("component operations", () => {
   bench("remove_all_10_from_5k", () => {
     const w = new World();
     const defs = Array.from({ length: 10 }, () =>
-      w.register_component(make_schema(2)),
+      w.register_component(make_fields(2)),
     );
     const vals = make_values(2);
     const ids: EntityID[] = [];
@@ -228,7 +228,7 @@ describe("component operations", () => {
 
   bench("add_remove_churn_10k", () => {
     const w = new World();
-    const C = w.register_component({ f0: "f32" });
+    const C = w.register_component(["f0"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) ids.push(w.create_entity());
 
@@ -240,7 +240,7 @@ describe("component operations", () => {
 
   bench("overwrite_component_10k", () => {
     const w = new World();
-    const C = w.register_component({ f0: "f32", f1: "f32" });
+    const C = w.register_component(["f0", "f1"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
@@ -255,8 +255,8 @@ describe("component operations", () => {
 
   bench("mixed_add_remove_10k", () => {
     const w = new World();
-    const A = w.register_component({ f0: "f32" });
-    const B = w.register_component({ f0: "f32" });
+    const A = w.register_component(["f0"]);
+    const B = w.register_component(["f0"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
@@ -284,9 +284,9 @@ describe("component operations", () => {
 describe("archetype fan-out stress", () => {
   bench("create_100_unique_archetypes", () => {
     const w = new World();
-    const defs: ComponentDef<ComponentSchema>[] = [];
+    const defs: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 100; i++)
-      defs.push(w.register_component(make_schema(1)));
+      defs.push(w.register_component(make_fields(1)));
     const vals = make_values(1);
 
     for (let i = 0; i < 100; i++) {
@@ -298,9 +298,9 @@ describe("archetype fan-out stress", () => {
   bench("create_500_unique_archetypes", () => {
     const rng = xorshift32(42);
     const w = new World();
-    const defs: ComponentDef<ComponentSchema>[] = [];
+    const defs: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 100; i++)
-      defs.push(w.register_component(make_schema(1)));
+      defs.push(w.register_component(make_fields(1)));
     const vals = make_values(1);
 
     for (let i = 0; i < 500; i++) {
@@ -313,9 +313,9 @@ describe("archetype fan-out stress", () => {
 
   bench("transition_across_100_archetypes", () => {
     const w = new World();
-    const defs: ComponentDef<ComponentSchema>[] = [];
+    const defs: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 101; i++)
-      defs.push(w.register_component(make_schema(1)));
+      defs.push(w.register_component(make_fields(1)));
     const vals = make_values(1);
 
     const ids: EntityID[] = [];
@@ -338,7 +338,7 @@ describe("archetype fan-out stress", () => {
 describe("deferred operations", () => {
   bench("deferred_add_flush_10k", () => {
     const w = new World();
-    const C = w.register_component({ f0: "f32" });
+    const C = w.register_component(["f0"]);
 
     const sys = w.register_system({
       fn(ctx) {
@@ -354,7 +354,7 @@ describe("deferred operations", () => {
 
   bench("deferred_remove_flush_10k", () => {
     const w = new World();
-    const C = w.register_component({ f0: "f32" });
+    const C = w.register_component(["f0"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
@@ -375,8 +375,8 @@ describe("deferred operations", () => {
 
   bench("deferred_mixed_flush_10k", () => {
     const w = new World();
-    const A = w.register_component({ f0: "f32" });
-    const B = w.register_component({ f0: "f32" });
+    const A = w.register_component(["f0"]);
+    const B = w.register_component(["f0"]);
     const ids: EntityID[] = [];
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
@@ -417,8 +417,8 @@ describe("deferred operations", () => {
 describe("query and iteration", () => {
   bench("query_cache_hit", () => {
     const w = new World();
-    const Pos = w.register_component({ x: "f32", y: "f32" });
-    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    const Pos = w.register_component(["x", "y"]);
+    const Vel = w.register_component(["vx", "vy"]);
     for (let i = 0; i < 1_000; i++) {
       const id = w.create_entity();
       w.add_component(id, Pos, { x: 0, y: 0 });
@@ -426,21 +426,15 @@ describe("query and iteration", () => {
     }
 
     let result: unknown;
-    const sys = w.register_system({
-      fn(ctx) {
-        for (let i = 0; i < 10_000; i++) result = ctx.query(Pos, Vel);
-      },
-    });
-    w.add_systems(SCHEDULE.STARTUP, sys);
-    w.startup();
+    for (let i = 0; i < 10_000; i++) result = w.query(Pos, Vel);
     void result;
   });
 
   bench("query_cold_miss", () => {
     const w = new World();
-    const defs: ComponentDef<ComponentSchema>[] = [];
+    const defs: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 10; i++)
-      defs.push(w.register_component(make_schema(2)));
+      defs.push(w.register_component(make_fields(2)));
     const vals = make_values(2);
 
     for (let i = 0; i < 1_000; i++) {
@@ -448,22 +442,16 @@ describe("query and iteration", () => {
       for (const d of defs) w.add_component(id, d, vals);
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(defs[0], defs[1]);
-      },
-    });
-    w.add_systems(SCHEDULE.STARTUP, sys);
-    w.startup();
+    w.query(defs[0], defs[1]);
   });
 
   bench("query_2_components_across_100_archetypes", () => {
     const w = new World();
-    const Shared1 = w.register_component(make_schema(1));
-    const Shared2 = w.register_component(make_schema(1));
-    const extras: ComponentDef<ComponentSchema>[] = [];
+    const Shared1 = w.register_component(make_fields(1));
+    const Shared2 = w.register_component(make_fields(1));
+    const extras: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 100; i++)
-      extras.push(w.register_component(make_schema(1)));
+      extras.push(w.register_component(make_fields(1)));
     const vals = make_values(1);
 
     for (let i = 0; i < 100; i++) {
@@ -473,23 +461,17 @@ describe("query and iteration", () => {
       w.add_component(id, extras[i], vals);
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(Shared1, Shared2);
-      },
-    });
-    w.add_systems(SCHEDULE.STARTUP, sys);
-    w.startup();
+    w.query(Shared1, Shared2);
   });
 
   bench("query_5_components_across_50_archetypes", () => {
     const w = new World();
-    const shared: ComponentDef<ComponentSchema>[] = [];
+    const shared: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 5; i++)
-      shared.push(w.register_component(make_schema(1)));
-    const extras: ComponentDef<ComponentSchema>[] = [];
+      shared.push(w.register_component(make_fields(1)));
+    const extras: ComponentDef<ComponentFields>[] = [];
     for (let i = 0; i < 50; i++)
-      extras.push(w.register_component(make_schema(1)));
+      extras.push(w.register_component(make_fields(1)));
     const vals = make_values(1);
 
     for (let i = 0; i < 50; i++) {
@@ -498,40 +480,31 @@ describe("query and iteration", () => {
       w.add_component(id, extras[i], vals);
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        ctx.query(...shared);
-      },
-    });
-    w.add_systems(SCHEDULE.STARTUP, sys);
-    w.startup();
+    w.query(...shared);
   });
 
   bench("iterate_10k_2_components", () => {
     const w = new World();
-    const Pos = w.register_component({ x: "f32", y: "f32" });
-    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    const Pos = w.register_component(["x", "y"] as const);
+    const Vel = w.register_component(["vx", "vy"] as const);
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
       w.add_component(id, Pos, { x: 0, y: 0 });
       w.add_component(id, Vel, { vx: 1, vy: 1 });
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(Pos, Vel);
-        for (const arch of archetypes) {
-          const px = arch.get_column(Pos, "x");
-          const py = arch.get_column(Pos, "y");
-          const vx = arch.get_column(Vel, "vx");
-          const vy = arch.get_column(Vel, "vy");
-          for (let i = 0; i < arch.entity_count; i++) {
-            px[i] += vx[i];
-            py[i] += vy[i];
+    const pv = w.query(Pos, Vel);
+    const sys = w.register_system(
+      (q, _ctx, _dt) => {
+        q.each((pos, vel, n) => {
+          for (let i = 0; i < n; i++) {
+            pos.x[i] += vel.vx[i];
+            pos.y[i] += vel.vy[i];
           }
-        }
+        });
       },
-    });
+      () => pv,
+    );
     w.add_systems(SCHEDULE.STARTUP, sys);
     w.startup();
   });
@@ -539,7 +512,7 @@ describe("query and iteration", () => {
   bench("iterate_10k_5_components", () => {
     const w = new World();
     const defs = Array.from({ length: 5 }, () =>
-      w.register_component({ a: "f32", b: "f32" }),
+      w.register_component(["a", "b"]),
     );
     const vals = { a: 0, b: 0 };
     for (let i = 0; i < 10_000; i++) {
@@ -547,72 +520,67 @@ describe("query and iteration", () => {
       for (const d of defs) w.add_component(id, d, vals);
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(...defs);
-        for (const arch of archetypes) {
+    const sys = w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
           const cols = defs.map((d) => arch.get_column(d, "a"));
           for (let i = 0; i < arch.entity_count; i++) {
             for (let c = 0; c < cols.length; c++) cols[c][i] += 1;
           }
         }
       },
-    });
+      (qb) => qb.every(...defs),
+    );
     w.add_systems(SCHEDULE.STARTUP, sys);
     w.startup();
   });
 
   bench("iterate_10k_10_components", () => {
     const w = new World();
-    const defs = Array.from({ length: 10 }, () =>
-      w.register_component({ a: "f32" }),
-    );
+    const defs = Array.from({ length: 10 }, () => w.register_component(["a"]));
     const vals = { a: 0 };
     for (let i = 0; i < 10_000; i++) {
       const id = w.create_entity();
       for (const d of defs) w.add_component(id, d, vals);
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(...defs);
-        for (const arch of archetypes) {
+    const sys = w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
           const cols = defs.map((d) => arch.get_column(d, "a"));
           for (let i = 0; i < arch.entity_count; i++) {
             for (let c = 0; c < cols.length; c++) cols[c][i] += 1;
           }
         }
       },
-    });
+      (qb) => qb.every(...defs),
+    );
     w.add_systems(SCHEDULE.STARTUP, sys);
     w.startup();
   });
 
   bench("iterate_100k_2_components", () => {
     const w = new World();
-    const Pos = w.register_component({ x: "f32", y: "f32" });
-    const Vel = w.register_component({ vx: "f32", vy: "f32" });
+    const Pos = w.register_component(["x", "y"] as const);
+    const Vel = w.register_component(["vx", "vy"] as const);
     for (let i = 0; i < 100_000; i++) {
       const id = w.create_entity();
       w.add_component(id, Pos, { x: 0, y: 0 });
       w.add_component(id, Vel, { vx: 1, vy: 1 });
     }
 
-    const sys = w.register_system({
-      fn(ctx) {
-        const archetypes = ctx.query(Pos, Vel);
-        for (const arch of archetypes) {
-          const px = arch.get_column(Pos, "x");
-          const py = arch.get_column(Pos, "y");
-          const vx = arch.get_column(Vel, "vx");
-          const vy = arch.get_column(Vel, "vy");
-          for (let i = 0; i < arch.entity_count; i++) {
-            px[i] += vx[i];
-            py[i] += vy[i];
+    const pv = w.query(Pos, Vel);
+    const sys = w.register_system(
+      (q, _ctx, _dt) => {
+        q.each((pos, vel, n) => {
+          for (let i = 0; i < n; i++) {
+            pos.x[i] += vel.vx[i];
+            pos.y[i] += vel.vy[i];
           }
-        }
+        });
       },
-    });
+      () => pv,
+    );
     w.add_systems(SCHEDULE.STARTUP, sys);
     w.startup();
   });
@@ -624,26 +592,25 @@ describe("query and iteration", () => {
 
 describe("frame_1_system_10k", () => {
   const w = new World();
-  const Pos = w.register_component({ x: "f32", y: "f32" });
-  const Vel = w.register_component({ vx: "f32", vy: "f32" });
+  const Pos = w.register_component(["x", "y"] as const);
+  const Vel = w.register_component(["vx", "vy"] as const);
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
     w.add_component(id, Pos, { x: 0, y: 0 });
     w.add_component(id, Vel, { vx: 1, vy: 1 });
   }
 
-  const sys = w.register_system({
-    fn(ctx, _dt) {
-      const archetypes = ctx.query(Pos, Vel);
-      for (const arch of archetypes) {
-        const px = arch.get_column(Pos, "x");
-        const vx = arch.get_column(Vel, "vx");
-        for (let i = 0; i < arch.entity_count; i++) {
-          px[i] += vx[i];
+  const pv = w.query(Pos, Vel);
+  const sys = w.register_system(
+    (q, _ctx, _dt) => {
+      q.each((pos, vel, n) => {
+        for (let i = 0; i < n; i++) {
+          pos.x[i] += vel.vx[i];
         }
-      }
+      });
     },
-  });
+    () => pv,
+  );
   w.add_systems(SCHEDULE.UPDATE, sys);
   w.startup();
 
@@ -654,9 +621,9 @@ describe("frame_1_system_10k", () => {
 
 describe("frame_3_systems_10k", () => {
   const w = new World();
-  const Pos = w.register_component({ x: "f32", y: "f32" });
-  const Vel = w.register_component({ vx: "f32", vy: "f32" });
-  const Hp = w.register_component({ current: "f32", max: "f32" });
+  const Pos = w.register_component(["x", "y"]);
+  const Vel = w.register_component(["vx", "vy"]);
+  const Hp = w.register_component(["current", "max"]);
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
     w.add_component(id, Pos, { x: 0, y: 0 });
@@ -664,18 +631,18 @@ describe("frame_3_systems_10k", () => {
     w.add_component(id, Hp, { current: 100, max: 100 });
   }
 
-  const make_sys = (...q: ComponentDef<ComponentSchema>[]) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const archetypes = ctx.query(...q);
-        for (const arch of archetypes) {
+  const make_sys = (...q: ComponentDef<ComponentFields>[]) =>
+    w.register_system(
+      (query, _ctx, _dt) => {
+        for (const arch of query) {
           const col = arch.get_column(q[0], "x" as never);
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    });
+      (qb) => qb.every(...q),
+    );
 
   w.add_systems(
     SCHEDULE.UPDATE,
@@ -692,9 +659,7 @@ describe("frame_3_systems_10k", () => {
 
 describe("frame_5_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 5 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 5 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -702,19 +667,17 @@ describe("frame_5_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -726,9 +689,7 @@ describe("frame_5_systems_10k", () => {
 
 describe("frame_10_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 10 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 10 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -736,19 +697,17 @@ describe("frame_10_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -760,9 +719,7 @@ describe("frame_10_systems_10k", () => {
 
 describe("frame_25_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 25 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 25 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -770,19 +727,17 @@ describe("frame_25_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -794,9 +749,7 @@ describe("frame_25_systems_10k", () => {
 
 describe("frame_50_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 50 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 50 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -804,19 +757,17 @@ describe("frame_50_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -828,9 +779,7 @@ describe("frame_50_systems_10k", () => {
 
 describe("frame_100_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 100 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 100 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -838,19 +787,17 @@ describe("frame_100_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -862,9 +809,7 @@ describe("frame_100_systems_10k", () => {
 
 describe("frame_200_systems_10k", () => {
   const w = new World();
-  const defs = Array.from({ length: 200 }, () =>
-    w.register_component({ a: "f32" }),
-  );
+  const defs = Array.from({ length: 200 }, () => w.register_component(["a"]));
   const vals = { a: 0 };
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -872,19 +817,17 @@ describe("frame_200_systems_10k", () => {
   }
 
   const systems = defs.map((_, si) =>
-    w.register_system({
-      fn(ctx, _dt) {
-        const a = defs[si];
-        const b = defs[(si + 1) % defs.length];
-        const archetypes = ctx.query(a, b);
-        for (const arch of archetypes) {
-          const col = arch.get_column(a, "a");
+    w.register_system(
+      (q, _ctx, _dt) => {
+        for (const arch of q) {
+          const col = arch.get_column(defs[si], "a");
           for (let i = 0; i < arch.entity_count; i++) {
             col[i] += 1;
           }
         }
       },
-    }),
+      (qb) => qb.every(defs[si], defs[(si + 1) % defs.length]),
+    ),
   );
   w.add_systems(SCHEDULE.UPDATE, ...systems);
   w.startup();
@@ -896,10 +839,10 @@ describe("frame_200_systems_10k", () => {
 
 describe("frame_with_structural_churn", () => {
   const w = new World();
-  const Pos = w.register_component({ x: "f32", y: "f32" });
-  const Vel = w.register_component({ vx: "f32", vy: "f32" });
-  w.register_component({}); // tag component (unused directly, creates archetype diversity)
-  const Marker = w.register_component({ v: "f32" });
+  const Pos = w.register_component(["x", "y"] as const);
+  const Vel = w.register_component(["vx", "vy"] as const);
+  w.register_component([]); // tag component (unused directly, creates archetype diversity)
+  const Marker = w.register_component(["v"]);
 
   for (let i = 0; i < 10_000; i++) {
     const id = w.create_entity();
@@ -907,19 +850,18 @@ describe("frame_with_structural_churn", () => {
     w.add_component(id, Vel, { vx: 1, vy: 1 });
   }
 
+  const pv = w.query(Pos, Vel);
   for (let s = 0; s < 100; s++) {
-    const sys = w.register_system({
-      fn(ctx, _dt) {
-        const archetypes = ctx.query(Pos, Vel);
-        for (const arch of archetypes) {
-          const px = arch.get_column(Pos, "x");
-          const vx = arch.get_column(Vel, "vx");
-          for (let i = 0; i < arch.entity_count; i++) {
-            px[i] += vx[i];
+    const sys = w.register_system(
+      (q, _ctx, _dt) => {
+        q.each((pos, vel, n) => {
+          for (let i = 0; i < n; i++) {
+            pos.x[i] += vel.vx[i];
           }
-        }
+        });
       },
-    });
+      () => pv,
+    );
     w.add_systems(SCHEDULE.UPDATE, sys);
   }
 

@@ -1,23 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { Schedule, SCHEDULE } from "../schedule";
-import { SystemRegistry } from "../../system/system_registry";
-import { SystemContext } from "../../query/query";
-import { Store } from "../../store/store";
-import type { SystemDescriptor } from "../../system/system";
+import { SystemContext } from "../query";
+import { Store } from "../store";
+import {
+  as_system_id,
+  type SystemConfig,
+  type SystemDescriptor,
+  type SystemFn,
+} from "../system";
+
+let next_id = 0;
+
+const noop: SystemFn = () => {};
 
 function make_ctx(): SystemContext {
   return new SystemContext(new Store());
 }
 
-function make_registry_and_system(
-  registry: SystemRegistry,
-  label?: string,
-): SystemDescriptor {
-  const calls: string[] = [];
-  return registry.register({
-    fn: (_ctx, _dt) => {
-      calls.push(label ?? `system_${0}`);
-    },
+function make_system(overrides?: Partial<SystemConfig>): SystemDescriptor {
+  return Object.freeze({
+    id: as_system_id(next_id++),
+    fn: overrides?.fn ?? noop,
+    on_added: overrides?.on_added,
+    on_removed: overrides?.on_removed,
+    dispose: overrides?.dispose,
   });
 }
 
@@ -27,9 +33,8 @@ describe("Schedule", () => {
   //=========================================================
 
   it("add_systems and has_system", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const sys = make_registry_and_system(registry);
+    const sys = make_system();
 
     expect(schedule.has_system(sys)).toBe(false);
 
@@ -38,9 +43,8 @@ describe("Schedule", () => {
   });
 
   it("remove_system removes from schedule", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const sys = make_registry_and_system(registry);
+    const sys = make_system();
 
     schedule.add_systems(SCHEDULE.UPDATE, sys);
     schedule.remove_system(sys);
@@ -49,19 +53,17 @@ describe("Schedule", () => {
   });
 
   it("remove_system is a no-op for unscheduled system", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const sys = make_registry_and_system(registry);
+    const sys = make_system();
 
     expect(() => schedule.remove_system(sys)).not.toThrow();
   });
 
   it("get_all_systems returns all scheduled systems", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const a = make_registry_and_system(registry);
-    const b = make_registry_and_system(registry);
-    const c = make_registry_and_system(registry);
+    const a = make_system();
+    const b = make_system();
+    const c = make_system();
 
     schedule.add_systems(SCHEDULE.STARTUP, a);
     schedule.add_systems(SCHEDULE.UPDATE, b, c);
@@ -74,10 +76,9 @@ describe("Schedule", () => {
   });
 
   it("clear removes all systems", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const a = make_registry_and_system(registry);
-    const b = make_registry_and_system(registry);
+    const a = make_system();
+    const b = make_system();
 
     schedule.add_systems(SCHEDULE.UPDATE, a, b);
     schedule.clear();
@@ -92,9 +93,8 @@ describe("Schedule", () => {
   //=========================================================
 
   it("throws on duplicate system", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
-    const sys = make_registry_and_system(registry);
+    const sys = make_system();
 
     schedule.add_systems(SCHEDULE.UPDATE, sys);
     expect(() => schedule.add_systems(SCHEDULE.UPDATE, sys)).toThrow();
@@ -105,20 +105,13 @@ describe("Schedule", () => {
   //=========================================================
 
   it("run_startup executes PRE_STARTUP -> STARTUP -> POST_STARTUP", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const pre = registry.register({
-      fn: () => order.push("pre"),
-    });
-    const main = registry.register({
-      fn: () => order.push("main"),
-    });
-    const post = registry.register({
-      fn: () => order.push("post"),
-    });
+    const pre = make_system({ fn: () => order.push("pre") });
+    const main = make_system({ fn: () => order.push("main") });
+    const post = make_system({ fn: () => order.push("post") });
 
     schedule.add_systems(SCHEDULE.PRE_STARTUP, pre);
     schedule.add_systems(SCHEDULE.STARTUP, main);
@@ -130,20 +123,13 @@ describe("Schedule", () => {
   });
 
   it("run_update executes PRE_UPDATE -> UPDATE -> POST_UPDATE", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const pre = registry.register({
-      fn: () => order.push("pre"),
-    });
-    const main = registry.register({
-      fn: () => order.push("main"),
-    });
-    const post = registry.register({
-      fn: () => order.push("post"),
-    });
+    const pre = make_system({ fn: () => order.push("pre") });
+    const main = make_system({ fn: () => order.push("main") });
+    const post = make_system({ fn: () => order.push("post") });
 
     schedule.add_systems(SCHEDULE.PRE_UPDATE, pre);
     schedule.add_systems(SCHEDULE.UPDATE, main);
@@ -155,12 +141,11 @@ describe("Schedule", () => {
   });
 
   it("run_update passes delta_time to system fn", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
 
     let received_dt = 0;
-    const sys = registry.register({
+    const sys = make_system({
       fn: (_ctx, dt) => {
         received_dt = dt;
       },
@@ -177,13 +162,12 @@ describe("Schedule", () => {
   //=========================================================
 
   it("before constraint orders systems correctly", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
 
     // a runs before b
     schedule.add_systems(
@@ -197,34 +181,31 @@ describe("Schedule", () => {
   });
 
   it("after constraint orders systems correctly", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
 
     // b runs after a
-    schedule.add_systems(
-      SCHEDULE.UPDATE,
-      a,
-      { system: b, ordering: { after: [a] } },
-    );
+    schedule.add_systems(SCHEDULE.UPDATE, a, {
+      system: b,
+      ordering: { after: [a] },
+    });
 
     schedule.run_update(ctx, 0);
     expect(order).toEqual(["a", "b"]);
   });
 
   it("insertion order is used as tiebreaker when no constraints", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
-    const c = registry.register({ fn: () => order.push("c") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
+    const c = make_system({ fn: () => order.push("c") });
 
     schedule.add_systems(SCHEDULE.UPDATE, a, b, c);
 
@@ -233,14 +214,13 @@ describe("Schedule", () => {
   });
 
   it("complex ordering chain: a -> b -> c", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
-    const c = registry.register({ fn: () => order.push("c") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
+    const c = make_system({ fn: () => order.push("c") });
 
     // c registered first but must run last
     schedule.add_systems(
@@ -255,20 +235,19 @@ describe("Schedule", () => {
   });
 
   it("constraints referencing systems in different labels are ignored", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
 
     // b is in a different label, so "after b" constraint is ignored
     schedule.add_systems(SCHEDULE.PRE_UPDATE, b);
-    schedule.add_systems(
-      SCHEDULE.UPDATE,
-      { system: a, ordering: { after: [b] } },
-    );
+    schedule.add_systems(SCHEDULE.UPDATE, {
+      system: a,
+      ordering: { after: [b] },
+    });
 
     schedule.run_update(ctx, 0);
     expect(order).toEqual(["b", "a"]);
@@ -279,12 +258,11 @@ describe("Schedule", () => {
   //=========================================================
 
   it("throws on circular dependency", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
 
-    const a = registry.register({ fn: () => {} });
-    const b = registry.register({ fn: () => {} });
+    const a = make_system();
+    const b = make_system();
 
     schedule.add_systems(
       SCHEDULE.UPDATE,
@@ -296,13 +274,12 @@ describe("Schedule", () => {
   });
 
   it("throws on 3-way circular dependency", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
 
-    const a = registry.register({ fn: () => {} });
-    const b = registry.register({ fn: () => {} });
-    const c = registry.register({ fn: () => {} });
+    const a = make_system();
+    const b = make_system();
+    const c = make_system();
 
     schedule.add_systems(
       SCHEDULE.UPDATE,
@@ -319,12 +296,11 @@ describe("Schedule", () => {
   //=========================================================
 
   it("sort cache invalidates on add", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
+    const a = make_system({ fn: () => order.push("a") });
     schedule.add_systems(SCHEDULE.UPDATE, a);
 
     schedule.run_update(ctx, 0);
@@ -332,7 +308,7 @@ describe("Schedule", () => {
 
     order.length = 0;
 
-    const b = registry.register({ fn: () => order.push("b") });
+    const b = make_system({ fn: () => order.push("b") });
     schedule.add_systems(SCHEDULE.UPDATE, b);
 
     schedule.run_update(ctx, 0);
@@ -340,13 +316,12 @@ describe("Schedule", () => {
   });
 
   it("sort cache invalidates on remove", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const ctx = make_ctx();
     const order: string[] = [];
 
-    const a = registry.register({ fn: () => order.push("a") });
-    const b = registry.register({ fn: () => order.push("b") });
+    const a = make_system({ fn: () => order.push("a") });
+    const b = make_system({ fn: () => order.push("b") });
     schedule.add_systems(SCHEDULE.UPDATE, a, b);
 
     schedule.run_update(ctx, 0);
@@ -364,13 +339,12 @@ describe("Schedule", () => {
   //=========================================================
 
   it("systems receive SystemContext with working store access", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const store = new Store();
     const ctx = new SystemContext(store);
 
     let created_entity = false;
-    const sys = registry.register({
+    const sys = make_system({
       fn: (ctx_arg) => {
         const id = ctx_arg.create_entity();
         created_entity = store.is_alive(id);
@@ -388,7 +362,6 @@ describe("Schedule", () => {
   //=========================================================
 
   it("entities destroyed in a system are flushed before the next phase runs", () => {
-    const registry = new SystemRegistry();
     const schedule = new Schedule();
     const store = new Store();
     const ctx = new SystemContext(store);
@@ -397,14 +370,14 @@ describe("Schedule", () => {
     let alive_in_update: boolean | null = null;
 
     // PRE_UPDATE system defers destruction
-    const destroyer = registry.register({
+    const destroyer = make_system({
       fn: (c) => {
         c.destroy_entity(entity);
       },
     });
 
     // UPDATE system checks if entity is still alive
-    const checker = registry.register({
+    const checker = make_system({
       fn: () => {
         alive_in_update = store.is_alive(entity);
       },

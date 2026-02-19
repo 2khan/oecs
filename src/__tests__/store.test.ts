@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { Store } from "../store";
-import { get_entity_index } from "../../entity/entity";
-import type { ComponentID } from "../../component/component";
+import { get_entity_index } from "../entity";
+
+import type { ComponentID } from "../component";
 import { BitSet } from "type_primitives";
 
 function make_mask(...ids: (number | ComponentID)[]): BitSet {
@@ -10,11 +11,11 @@ function make_mask(...ids: (number | ComponentID)[]): BitSet {
   return mask;
 }
 
-// Schemas
-const Position = { x: "f32", y: "f32", z: "f32" } as const;
-const Velocity = { vx: "f32", vy: "f32", vz: "f32" } as const;
-const Health = { current: "i32", max: "i32" } as const;
-const Tag = {} as const; // empty schema (marker component)
+// Field arrays
+const Position = ["x", "y", "z"] as const;
+const Velocity = ["vx", "vy", "vz"] as const;
+const Health = ["current", "max"] as const;
+const Tag = [] as const; // empty (marker component)
 
 describe("Store", () => {
   //=========================================================
@@ -78,7 +79,7 @@ describe("Store", () => {
 
     // Data is accessible via archetype columns
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(1);
     expect(arch.read_field(row, Pos as ComponentID, "y")).toBe(2);
     expect(arch.read_field(row, Pos as ComponentID, "z")).toBe(3);
@@ -96,7 +97,7 @@ describe("Store", () => {
     expect(store.archetype_count).toBe(arch_count_before);
 
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(10);
     expect(arch.read_field(row, Pos as ComponentID, "y")).toBe(20);
     expect(arch.read_field(row, Pos as ComponentID, "z")).toBe(30);
@@ -118,7 +119,7 @@ describe("Store", () => {
 
     // Verify data survived the transition
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(1);
     expect(arch.read_field(row, Vel as ComponentID, "vx")).toBe(4);
   });
@@ -143,7 +144,7 @@ describe("Store", () => {
 
     // Position data is preserved after transition
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(1);
     expect(arch.read_field(row, Pos as ComponentID, "y")).toBe(2);
     expect(arch.read_field(row, Pos as ComponentID, "z")).toBe(3);
@@ -247,7 +248,7 @@ describe("Store", () => {
     store.add_component(id, Vel, { vx: 1, vy: 2, vz: 3 });
 
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
 
     // Pos data survived the transition
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(10);
@@ -307,8 +308,8 @@ describe("Store", () => {
     store.add_component(e2, Pos, { x: 0, y: 0, z: 0 });
     store.add_component(e2, Hp, { current: 100, max: 100 });
 
-    // Query for [Pos] - 3 archetypes match: [Pos] (empty intermediate),
-    // [Pos, Vel], and [Pos, Hp]. Both entities' final archetypes are included.
+    // Query for [Pos] - 3 archetypes match: [Pos] (intermediate, created during
+    // e1's first add_component), [Pos, Vel], and [Pos, Hp].
     const pos_matches = store.get_matching_archetypes(
       make_mask(Pos as ComponentID),
     );
@@ -354,7 +355,7 @@ describe("Store", () => {
     const store = new Store();
     const Pos = store.register_component(Position);
 
-    store.create_entity(); // in empty archetype
+    store.create_entity(); // alive but has no archetype row yet
     const e2 = store.create_entity();
     store.add_component(e2, Pos, { x: 0, y: 0, z: 0 });
 
@@ -399,7 +400,7 @@ describe("Store", () => {
     store.destroy_entity(e1);
 
     const arch = store.get_entity_archetype(e2);
-    const row = arch.get_row(get_entity_index(e2));
+    const row = store.get_entity_row(e2);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(100);
     expect(arch.read_field(row, Pos as ComponentID, "y")).toBe(200);
     expect(arch.read_field(row, Pos as ComponentID, "z")).toBe(300);
@@ -450,7 +451,7 @@ describe("Store", () => {
     const e2 = store.create_entity();
 
     store.add_component(e1, Pos, { x: 0, y: 0, z: 0 });
-    store.add_component(e1, Marker, {} as Record<string, number>);
+    store.add_component(e1, Marker, {});
 
     store.add_component(e2, Pos, { x: 0, y: 0, z: 0 });
 
@@ -584,7 +585,7 @@ describe("Store", () => {
 
     // Data is correct
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Vel as ComponentID, "vx")).toBe(4);
     expect(arch.read_field(row, Vel as ComponentID, "vy")).toBe(5);
     expect(arch.read_field(row, Vel as ComponentID, "vz")).toBe(6);
@@ -663,7 +664,7 @@ describe("Store", () => {
     store.flush_structural();
 
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(10);
     expect(arch.read_field(row, Pos as ComponentID, "y")).toBe(20);
     expect(arch.read_field(row, Pos as ComponentID, "z")).toBe(30);
@@ -753,7 +754,7 @@ describe("Store", () => {
     expect(store.has_component(id, Vel)).toBe(true);
 
     const arch = store.get_entity_archetype(id);
-    const row = arch.get_row(get_entity_index(id));
+    const row = store.get_entity_row(id);
     expect(arch.read_field(row, Pos as ComponentID, "x")).toBe(1);
     expect(arch.read_field(row, Vel as ComponentID, "vx")).toBe(4);
   });
@@ -779,11 +780,11 @@ describe("Store", () => {
 
     // Remaining entities should still have correct data
     const arch1 = store.get_entity_archetype(e1);
-    const row1 = arch1.get_row(get_entity_index(e1));
+    const row1 = store.get_entity_row(e1);
     expect(arch1.read_field(row1, Pos as ComponentID, "x")).toBe(1);
 
     const arch3 = store.get_entity_archetype(e3);
-    const row3 = arch3.get_row(get_entity_index(e3));
+    const row3 = store.get_entity_row(e3);
     expect(arch3.read_field(row3, Pos as ComponentID, "x")).toBe(3);
   });
 });
