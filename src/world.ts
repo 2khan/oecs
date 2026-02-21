@@ -56,6 +56,7 @@ import {
 } from "./query";
 import type { EntityID } from "./entity";
 import type { ComponentDef, ComponentFields, FieldValues } from "./component";
+import type { EventDef } from "./event";
 import {
   as_system_id,
   type SystemConfig,
@@ -93,6 +94,14 @@ export class World implements QueryResolver {
 
   register_tag(): ComponentDef<readonly []> {
     return this.store.register_component([] as const);
+  }
+
+  register_event<F extends readonly string[]>(fields: F): EventDef<F> {
+    return this.store.register_event(fields);
+  }
+
+  register_signal(): EventDef<readonly []> {
+    return this.store.register_event([] as const);
   }
 
   create_entity(): EntityID {
@@ -301,6 +310,7 @@ export class World implements QueryResolver {
   }
 
   update(delta_time: number): void {
+    this.store.clear_events();
     this.schedule.run_update(this.ctx, delta_time);
   }
 

@@ -39,6 +39,12 @@ import {
   type ComponentFields,
   type FieldValues,
 } from "./component";
+import {
+  EventChannel,
+  as_event_id,
+  type EventDef,
+  type EventReader,
+} from "./event";
 import { unsafe_cast, BitSet } from "type_primitives";
 import {
   Archetype,
@@ -71,6 +77,11 @@ export class Store {
   // for building archetype column layouts.
   private component_metas: ComponentMeta[] = [];
   private component_count = 0;
+
+  // --- Event channels ---
+  // Parallel array indexed by EventID: each channel holds SoA columns + reader.
+  private event_channels: EventChannel[] = [];
+  private event_count = 0;
 
   // --- Archetype management ---
   private archetypes: Archetype[] = [];
@@ -813,5 +824,42 @@ export class Store {
 
   get archetype_count(): number {
     return this.archetypes.length;
+  }
+
+  // =======================================================
+  // Event channels
+  // =======================================================
+
+  public register_event<F extends readonly string[]>(
+    fields: F,
+  ): EventDef<F> {
+    const id = as_event_id(this.event_count++);
+    const channel = new EventChannel(fields as unknown as string[]);
+    this.event_channels.push(channel);
+    return unsafe_cast<EventDef<F>>(id);
+  }
+
+  public emit_event<F extends ComponentFields>(
+    def: EventDef<F>,
+    values: Record<string, number>,
+  ): void {
+    this.event_channels[def as unknown as number].emit(values);
+  }
+
+  public emit_signal(def: EventDef<readonly []>): void {
+    this.event_channels[def as unknown as number].emit_signal();
+  }
+
+  public get_event_reader<F extends ComponentFields>(
+    def: EventDef<F>,
+  ): EventReader<F> {
+    return this.event_channels[def as unknown as number].reader as EventReader<F>;
+  }
+
+  public clear_events(): void {
+    const channels = this.event_channels;
+    for (let i = 0; i < channels.length; i++) {
+      channels[i].clear();
+    }
   }
 }

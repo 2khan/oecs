@@ -41,6 +41,7 @@ import type {
   FieldValues,
   ColumnsForSchema,
 } from "./component";
+import type { EventDef, EventReader } from "./event";
 import { BitSet } from "type_primitives";
 
 const EMPTY_VALUES: Record<string, number> = Object.freeze(Object.create(null));
@@ -264,5 +265,29 @@ export class SystemContext {
   flush(): void {
     this.store.flush_structural();
     this.store.flush_destroyed();
+  }
+
+  // =======================================================
+  // Events
+  // =======================================================
+
+  emit(def: EventDef<readonly []>): void;
+  emit<F extends ComponentFields>(
+    def: EventDef<F>,
+    values: FieldValues<F>,
+  ): void;
+  emit(
+    def: EventDef<ComponentFields>,
+    values?: Record<string, number>,
+  ): void {
+    if (values === undefined) {
+      this.store.emit_signal(def as EventDef<readonly []>);
+    } else {
+      this.store.emit_event(def, values);
+    }
+  }
+
+  read<F extends ComponentFields>(def: EventDef<F>): EventReader<F> {
+    return this.store.get_event_reader(def);
   }
 }
