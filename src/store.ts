@@ -705,6 +705,48 @@ export class Store {
     this.entity_row[entity_index] = dst_row;
   }
 
+  /** Remove multiple components in one transition (resolves final archetype, then moves once). */
+  public remove_components(
+    entity_id: EntityID,
+    defs: ComponentDef<ComponentFields>[],
+  ): void {
+    if (!this.is_alive(entity_id)) {
+      if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+      return;
+    }
+
+    const entity_index = get_entity_index(entity_id);
+    const current_archetype_id = this.entity_archetype[
+      entity_index
+    ] as ArchetypeID;
+
+    // Walk the graph through all removes to find the final target archetype
+    let target_archetype_id: ArchetypeID = current_archetype_id;
+    for (let i = 0; i < defs.length; i++) {
+      target_archetype_id = this.arch_resolve_remove(
+        target_archetype_id,
+        defs[i] as unknown as ComponentID,
+      );
+    }
+
+    // If target === source, none of the components were present — no-op
+    if (target_archetype_id === current_archetype_id) return;
+
+    const source_arch = this.arch_get(current_archetype_id);
+    const target_arch = this.arch_get(target_archetype_id);
+
+    const src_row = this.entity_row[entity_index];
+    const dst_row = target_arch.add_entity(entity_id);
+
+    target_arch.copy_shared_from(source_arch, src_row, dst_row);
+
+    const swapped_idx = source_arch.remove_entity(src_row);
+    if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+
+    this.entity_archetype[entity_index] = target_archetype_id;
+    this.entity_row[entity_index] = dst_row;
+  }
+
   public has_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentFields>,

@@ -55,7 +55,7 @@ import {
   type QueryCacheEntry,
 } from "./query";
 import type { EntityID } from "./entity";
-import type { ComponentDef, ComponentFields, FieldValues } from "./component";
+import type { ComponentDef, ComponentID, ComponentFields, FieldValues } from "./component";
 import type { EventDef } from "./event";
 import {
   as_system_id,
@@ -147,8 +147,16 @@ export class World implements QueryResolver {
   remove_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentFields>,
-  ): void {
+  ): this {
     this.store.remove_component(entity_id, def);
+    return this;
+  }
+
+  remove_components(
+    entity_id: EntityID,
+    ...defs: ComponentDef<ComponentFields>[]
+  ): void {
+    this.store.remove_components(entity_id, defs);
   }
 
   has_component(
@@ -156,6 +164,32 @@ export class World implements QueryResolver {
     def: ComponentDef<ComponentFields>,
   ): boolean {
     return this.store.has_component(entity_id, def);
+  }
+
+  get_field<F extends ComponentFields>(
+    def: ComponentDef<F>,
+    entity_id: EntityID,
+    field: F[number],
+  ): number {
+    const arch = this.store.get_entity_archetype(entity_id);
+    const row = this.store.get_entity_row(entity_id);
+    return arch.read_field(row, def as unknown as ComponentID, field);
+  }
+
+  emit(def: EventDef<readonly []>): void;
+  emit<F extends ComponentFields>(
+    def: EventDef<F>,
+    values: FieldValues<F>,
+  ): void;
+  emit(
+    def: EventDef<ComponentFields>,
+    values?: Record<string, number>,
+  ): void {
+    if (values === undefined) {
+      this.store.emit_signal(def as EventDef<readonly []>);
+    } else {
+      this.store.emit_event(def, values);
+    }
   }
 
   query<T extends ComponentDef<ComponentFields>[]>(...defs: T): Query<T> {
@@ -288,8 +322,9 @@ export class World implements QueryResolver {
   add_systems(
     label: SCHEDULE,
     ...entries: (SystemDescriptor | SystemEntry)[]
-  ): void {
+  ): this {
     this.schedule.add_systems(label, ...entries);
+    return this;
   }
 
   remove_system(system: SystemDescriptor): void {
