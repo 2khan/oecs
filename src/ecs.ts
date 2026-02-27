@@ -450,7 +450,8 @@ export class ECS implements QueryResolver {
         // (fn, query_fn) overload — resolve query at registration time
         const q = query_fn(new QueryBuilder(this));
         const ctx = this.ctx;
-        config = { fn: (_ctx, dt) => fn_or_config(q, ctx, dt) };
+        const fn = fn_or_config as (q: Query<any>, ctx: SystemContext, dt: number) => void;
+        config = { fn: (_ctx, dt) => fn(q, ctx, dt) };
       } else {
         // Bare function overload
         config = { fn: fn_or_config as SystemFn };

@@ -3,6 +3,7 @@ import {
   Archetype,
   as_archetype_id,
   type ArchetypeColumnLayout,
+  type ArchetypeEdge,
 } from "../archetype";
 import { as_component_id, type ComponentDef } from "../component";
 import { create_entity_id } from "../entity";
@@ -226,7 +227,7 @@ describe("Archetype", () => {
 
   it("set_edge / get_edge round-trips", () => {
     const a = new Archetype(arch_id(0), make_mask());
-    const edge = { add: arch_id(1), remove: null };
+    const edge: ArchetypeEdge = { add: arch_id(1), remove: null, add_map: null, remove_map: null };
     a.set_edge(comp_id(5), edge);
 
     const retrieved = a.get_edge(comp_id(5));

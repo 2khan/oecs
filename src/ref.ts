@@ -28,7 +28,7 @@ import type { GrowableTypedArray, AnyTypedArray } from "type_primitives";
 
 /** Maps component schema to scalar get/set properties: { x: number, y: number }. */
 export type ComponentRef<S extends ComponentSchema> = {
-  [K in keyof S]: number;
+  -readonly [K in keyof S]: number;
 };
 
 interface RefInternal {
@@ -63,8 +63,12 @@ export function create_ref<S extends ComponentSchema>(
     for (let i = 0; i < field_names.length; i++) {
       const col_idx = i;
       Object.defineProperty(proto, field_names[i], {
-        get(this: RefInternal) { return this._columns[col_idx][this._row]; },
-        set(this: RefInternal, v: number) { this._columns[col_idx][this._row] = v; },
+        get(this: RefInternal) {
+          return this._columns[col_idx][this._row];
+        },
+        set(this: RefInternal, v: number) {
+          this._columns[col_idx][this._row] = v;
+        },
         enumerable: true,
         configurable: false,
       });

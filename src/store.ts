@@ -839,8 +839,6 @@ export class Store {
     const edge = src_arch.get_edge(comp_id)!;
     const count = src_arch.length;
 
-    // Record entity indices before bulk move (entity_ids will be cleared)
-    const src_eids = src_arch._entity_ids.buf;
     const ent_arch = this.entity_archetype;
     const ent_row = this.entity_row;
 
