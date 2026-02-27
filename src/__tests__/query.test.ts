@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { World } from "../world";
+import { ECS } from "../ecs";
 import { SCHEDULE } from "../schedule";
 
 // Field arrays
@@ -8,13 +8,13 @@ const Velocity = ["vx", "vy"] as const;
 const Health = ["hp"] as const;
 const Static = [] as const; // tag component
 
-describe("World query", () => {
+describe("ECS query", () => {
   //=========================================================
   // Basic query
   //=========================================================
 
   it("query returns matching archetypes", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -32,7 +32,7 @@ describe("World query", () => {
   });
 
   it("query with single component returns all archetypes containing it", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -55,7 +55,7 @@ describe("World query", () => {
   //=========================================================
 
   it("cached query returns same reference on repeated calls", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
 
     const e1 = world.create_entity();
@@ -69,7 +69,7 @@ describe("World query", () => {
   });
 
   it("live query result grows when new matching archetype is created", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -92,7 +92,7 @@ describe("World query", () => {
   });
 
   it("cache is stable when no new archetypes are created", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
 
     const e1 = world.create_entity();
@@ -112,7 +112,7 @@ describe("World query", () => {
   });
 
   it("unrelated archetype does not grow the query result", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Hp = world.register_component(Health);
 
@@ -138,7 +138,7 @@ describe("World query", () => {
   //=========================================================
 
   it("query result is the same regardless of component order", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -157,7 +157,7 @@ describe("World query", () => {
   //=========================================================
 
   it("destroy_entity defers — entity stays alive after call", () => {
-    const world = new World();
+    const world = new ECS();
 
     const id = world.create_entity();
     world.destroy_entity(id);
@@ -166,7 +166,7 @@ describe("World query", () => {
   });
 
   it("flush processes the deferred buffer", () => {
-    const world = new World();
+    const world = new ECS();
 
     const id = world.create_entity();
     world.destroy_entity(id);
@@ -180,7 +180,7 @@ describe("World query", () => {
   //=========================================================
 
   it("allows column access through archetype dense columns", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -203,7 +203,7 @@ describe("World query", () => {
   //=========================================================
 
   it("deferred add_component does not change query result length until flush", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -237,7 +237,7 @@ describe("World query", () => {
   });
 
   it("deferred remove_component does not change query result until flush", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -271,7 +271,7 @@ describe("World query", () => {
   });
 
   it("two systems in sequence see consistent state until flush", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -314,7 +314,7 @@ describe("World query", () => {
   });
 
   it("flush processes structural changes before destructions", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -339,11 +339,11 @@ describe("World query", () => {
   });
 
   //=========================================================
-  // Query.each() — typed column iteration
+  // for..of iteration
   //=========================================================
 
-  it("each() calls fn once per non-empty archetype with correct columns and count", () => {
-    const world = new World();
+  it("for..of yields non-empty archetypes with correct columns and count", () => {
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -355,25 +355,27 @@ describe("World query", () => {
     world.add_component(e2, Pos, { x: 30, y: 40 });
     world.add_component(e2, Vel, { vx: 3, vy: 4 });
 
-    let call_count = 0;
+    let arch_count = 0;
     let total_entities = 0;
 
-    world.query(Pos, Vel).each((pos, vel, n) => {
-      call_count++;
-      total_entities += n;
+    for (const arch of world.query(Pos, Vel)) {
+      arch_count++;
+      total_entities += arch.entity_count;
       // Verify typed columns are accessible
-      for (let i = 0; i < n; i++) {
-        expect(typeof pos.x[i]).toBe("number");
-        expect(typeof vel.vx[i]).toBe("number");
+      const px = arch.get_column(Pos, "x");
+      const vx = arch.get_column(Vel, "vx");
+      for (let i = 0; i < arch.entity_count; i++) {
+        expect(typeof px[i]).toBe("number");
+        expect(typeof vx[i]).toBe("number");
       }
-    });
+    }
 
-    expect(call_count).toBe(1); // one archetype
+    expect(arch_count).toBe(1); // one archetype
     expect(total_entities).toBe(2);
   });
 
-  it("each() skips archetypes with zero entities", () => {
-    const world = new World();
+  it("for..of skips archetypes with zero entities", () => {
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -387,15 +389,15 @@ describe("World query", () => {
     world.destroy_entity(e1);
     world.flush();
 
-    let call_count = 0;
-    q.each((_pos, _vel, _n) => {
-      call_count++;
-    });
-    expect(call_count).toBe(0);
+    let arch_count = 0;
+    for (const _arch of q) {
+      arch_count++;
+    }
+    expect(arch_count).toBe(0);
   });
 
-  it("each() reflects correct typed array values", () => {
-    const world = new World();
+  it("for..of iteration allows column mutation", () => {
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -403,12 +405,14 @@ describe("World query", () => {
     world.add_component(e1, Pos, { x: 5, y: 7 });
     world.add_component(e1, Vel, { vx: 2, vy: 3 });
 
-    world.query(Pos, Vel).each((pos, vel, n) => {
-      for (let i = 0; i < n; i++) {
+    for (const arch of world.query(Pos, Vel)) {
+      const pos = arch.get_column_group(Pos);
+      const vel = arch.get_column_group(Vel);
+      for (let i = 0; i < arch.entity_count; i++) {
         pos.x[i] += vel.vx[i]; // 5 + 2 = 7
         pos.y[i] += vel.vy[i]; // 7 + 3 = 10
       }
-    });
+    }
 
     // Verify mutation via get_column
     for (const arch of world.query(Pos, Vel)) {
@@ -426,7 +430,7 @@ describe("World query", () => {
   //=========================================================
 
   it("not() excludes archetypes that have the given component", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Stat = world.register_component(Static);
@@ -454,7 +458,7 @@ describe("World query", () => {
   });
 
   it("not() live — newly created excluded archetype does not appear", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Stat = world.register_component(Static);
@@ -477,7 +481,7 @@ describe("World query", () => {
   });
 
   it("not() cache hit — same Query reference returned on repeated calls", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Stat = world.register_component(Static);
@@ -493,7 +497,7 @@ describe("World query", () => {
   //=========================================================
 
   it("and() returns same cached Query as query() with both components", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -508,7 +512,7 @@ describe("World query", () => {
   });
 
   it("and() chaining is order-independent — same mask → same result", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -519,7 +523,7 @@ describe("World query", () => {
   });
 
   it("and() cache hit — same Query reference on repeated chains", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -530,7 +534,7 @@ describe("World query", () => {
   });
 
   it("and() skips duplicate components already in include mask", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
 
     const q1 = world.query(Pos).and(Pos);
@@ -544,7 +548,7 @@ describe("World query", () => {
   //=========================================================
 
   it("or() passes archetypes with at least one of the or-components", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Hp = world.register_component(Health);
@@ -572,7 +576,7 @@ describe("World query", () => {
   });
 
   it("or() live — new matching archetype gets added to live array", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Hp = world.register_component(Health);
@@ -595,7 +599,7 @@ describe("World query", () => {
   });
 
   it("or() live — archetype with none of the or-components is not added", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Hp = world.register_component(Health);
@@ -616,7 +620,7 @@ describe("World query", () => {
   });
 
   it("or() cache hit — same Query reference on repeated calls", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
     const Hp = world.register_component(Health);
@@ -632,7 +636,7 @@ describe("World query", () => {
   //=========================================================
 
   it("register_system with query builder resolves query at registration time", () => {
-    const world = new World();
+    const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
 
@@ -657,7 +661,7 @@ describe("World query", () => {
   });
 
   it("register_system with config object still works", () => {
-    const world = new World();
+    const world = new ECS();
     let ran = false;
     const sys = world.register_system({
       fn: (_ctx, _dt) => {

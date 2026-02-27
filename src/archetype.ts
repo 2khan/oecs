@@ -32,6 +32,7 @@ import type {
 } from "./component";
 import { get_entity_index, type EntityID } from "./entity";
 import { ECS_ERROR, ECSError } from "./utils/error";
+import { NO_SWAP } from "./utils/constants";
 import type { BitSet } from "type_primitives";
 
 export type ArchetypeID = Brand<number, "archetype_id">;
@@ -65,16 +66,16 @@ export class Archetype {
   readonly mask: BitSet;
   readonly has_columns: boolean;
 
-  entity_ids: EntityID[] = [];
-  length: number = 0;
-  private edges: ArchetypeEdge[] = [];
+  public readonly entity_ids: EntityID[] = [];
+  public length: number = 0;
+  private readonly edges: ArchetypeEdge[] = [];
 
   // Sparse array indexed by ComponentID — undefined for absent components.
   // Allows O(1) column group lookup by component.
   readonly column_groups: (ArchetypeColumnGroup | undefined)[] = [];
   // Dense list of ComponentIDs that have columns — used to iterate only
   // data-bearing components in copy/add/remove operations.
-  private _column_ids: number[] = [];
+  private readonly _column_ids: number[] = [];
 
   constructor(
     id: ArchetypeID,
@@ -91,18 +92,18 @@ export class Archetype {
         for (let j = 0; j < layout.field_names.length; j++) {
           columns[j] = [];
         }
-        // Build a named record { fieldName: column } so Query.each() can pass
-        // e.g. { x: number[], y: number[] } directly to the system callback
+        // Build a named record { fieldName: column } so get_column_group() returns
+        // e.g. { x: number[], y: number[] } directly for system iteration
         const record: Record<string, number[]> = Object.create(null);
         for (let k = 0; k < layout.field_names.length; k++) {
           record[layout.field_names[k]] = columns[k];
         }
-        this.column_groups[layout.component_id as number] = {
+        this.column_groups[layout.component_id] = {
           layout,
           columns,
           record,
         };
-        this._column_ids.push(layout.component_id as number);
+        this._column_ids.push(layout.component_id);
       }
     }
 
@@ -130,7 +131,7 @@ export class Archetype {
     def: ComponentDef<F>,
     field: Field,
   ): number[] {
-    const group = this.column_groups[def as unknown as number];
+    const group = this.column_groups[def];
     if (__DEV__) {
       if (!group) {
         throw new ECSError(
@@ -155,7 +156,7 @@ export class Archetype {
   public get_column_group<F extends ComponentFields>(
     def: ComponentDef<F>,
   ): ColumnsForSchema<F> {
-    const group = this.column_groups[def as unknown as number];
+    const group = this.column_groups[def];
     if (!group) return {} as ColumnsForSchema<F>;
     return group.record as unknown as ColumnsForSchema<F>;
   }
@@ -165,7 +166,7 @@ export class Archetype {
     component_id: ComponentID,
     values: Record<string, number>,
   ): void {
-    const group = this.column_groups[component_id as number];
+    const group = this.column_groups[component_id];
     if (!group) return;
     const { field_names } = group.layout;
     for (let i = 0; i < field_names.length; i++) {
@@ -178,7 +179,7 @@ export class Archetype {
     component_id: ComponentID,
     field: string,
   ): number {
-    const group = this.column_groups[component_id as number];
+    const group = this.column_groups[component_id];
     if (!group) return NaN;
     const col_idx = group.layout.field_index[field];
     if (col_idx === undefined) return NaN;
@@ -227,11 +228,11 @@ export class Archetype {
   /**
    * Remove entity at row via swap-and-pop. Swaps the last entity into the
    * vacated row to keep data dense. Returns the entity_index of the swapped
-   * entity (so Store can update its row), or -1 if no swap was needed.
+   * entity (so Store can update its row), or NO_SWAP if no swap was needed.
    */
   public remove_entity(row: number): number {
     const last_row = this.length - 1;
-    let swapped_entity_index = -1;
+    let swapped_entity_index = NO_SWAP;
     const ids = this._column_ids;
 
     if (row !== last_row) {
@@ -271,7 +272,7 @@ export class Archetype {
   /** Tag-optimized remove via swap-and-pop: skip column swap/pop entirely. */
   public remove_entity_tag(row: number): number {
     const last_row = this.length - 1;
-    let swapped_entity_index = -1;
+    let swapped_entity_index = NO_SWAP;
 
     if (row !== last_row) {
       this.entity_ids[row] = this.entity_ids[last_row];

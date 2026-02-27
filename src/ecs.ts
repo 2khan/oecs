@@ -27,12 +27,14 @@
  *
  *   const moveSys = world.register_system(
  *     (q, _ctx, dt) => {
- *       q.each((pos, vel, n) => {
- *         for (let i = 0; i < n; i++) {
+ *       for (const arch of q) {
+ *         const pos = arch.get_column_group(Pos);
+ *         const vel = arch.get_column_group(Vel);
+ *         for (let i = 0; i < arch.entity_count; i++) {
  *           pos.x[i] += vel.vx[i] * dt;
  *           pos.y[i] += vel.vy[i] * dt;
  *         }
- *       });
+ *       }
  *     },
  *     (qb) => qb.every(Pos, Vel),
  *   );
@@ -55,8 +57,14 @@ import {
   type QueryCacheEntry,
 } from "./query";
 import type { EntityID } from "./entity";
-import type { ComponentDef, ComponentID, ComponentFields, FieldValues } from "./component";
+import type {
+  ComponentDef,
+  ComponentID,
+  ComponentFields,
+  FieldValues,
+} from "./component";
 import type { EventDef } from "./event";
+import type { ResourceDef, ResourceReader } from "./resource";
 import {
   as_system_id,
   type SystemConfig,
@@ -65,20 +73,25 @@ import {
 import type { SystemEntry } from "./schedule";
 import { BitSet } from "type_primitives";
 import { bucket_push } from "./utils/arrays";
-
-const EMPTY_VALUES: Record<string, number> = Object.freeze(Object.create(null));
+import {
+  EMPTY_VALUES,
+  DEFAULT_FIXED_TIMESTEP,
+  DEFAULT_MAX_FIXED_STEPS,
+  HASH_GOLDEN_RATIO,
+  HASH_SECONDARY_PRIME,
+} from "./utils/constants";
 
 export interface WorldOptions {
   fixed_timestep?: number;
   max_fixed_steps?: number;
 }
 
-export class World implements QueryResolver {
+export class ECS implements QueryResolver {
   private readonly store: Store;
   private readonly schedule: Schedule;
   private readonly ctx: SystemContext;
 
-  private systems: Set<SystemDescriptor> = new Set();
+  private readonly systems: Set<SystemDescriptor> = new Set();
   private next_system_id = 0;
 
   // Fixed timestep accumulator
@@ -88,69 +101,99 @@ export class World implements QueryResolver {
 
   // Query deduplication: hash(include, exclude, any_of) → bucket of cache entries.
   // Multiple queries can share the same hash (collision), so each bucket is an array.
-  private query_cache: Map<number, QueryCacheEntry[]> = new Map();
+  private readonly query_cache: Map<number, QueryCacheEntry[]> = new Map();
   // Reusable BitSet for building query masks — avoids allocation per query() call
-  private scratch_mask: BitSet = new BitSet();
+  private readonly scratch_mask: BitSet = new BitSet();
 
   constructor(options?: WorldOptions) {
     this.store = new Store();
     this.schedule = new Schedule();
     this.ctx = new SystemContext(this.store);
-    this._fixed_timestep = options?.fixed_timestep ?? 1 / 60;
-    this._max_fixed_steps = options?.max_fixed_steps ?? 4;
+    this._fixed_timestep = options?.fixed_timestep ?? DEFAULT_FIXED_TIMESTEP;
+    this._max_fixed_steps = options?.max_fixed_steps ?? DEFAULT_MAX_FIXED_STEPS;
   }
 
-  get fixed_timestep(): number {
+  public get fixed_timestep(): number {
     return this._fixed_timestep;
   }
 
-  set fixed_timestep(value: number) {
+  public set fixed_timestep(value: number) {
     this._fixed_timestep = value;
   }
 
-  get fixed_alpha(): number {
+  public get fixed_alpha(): number {
     return this._accumulator / this._fixed_timestep;
   }
 
-  register_component<F extends readonly string[]>(fields: F): ComponentDef<F> {
+  public register_component<F extends readonly string[]>(
+    fields: F,
+  ): ComponentDef<F> {
     return this.store.register_component(fields);
   }
 
-  register_tag(): ComponentDef<readonly []> {
+  public register_tag(): ComponentDef<readonly []> {
     return this.store.register_component([] as const);
   }
 
-  register_event<F extends readonly string[]>(fields: F): EventDef<F> {
+  public register_event<F extends readonly string[]>(fields: F): EventDef<F> {
     return this.store.register_event(fields);
   }
 
-  register_signal(): EventDef<readonly []> {
+  public register_signal(): EventDef<readonly []> {
     return this.store.register_event([] as const);
   }
 
-  create_entity(): EntityID {
+  public register_resource<F extends readonly string[]>(
+    fields: F,
+    initial: FieldValues<F>,
+  ): ResourceDef<F> {
+    return this.store.register_resource(
+      fields,
+      initial as Record<string, number>,
+    );
+  }
+
+  public resource<F extends ComponentFields>(
+    def: ResourceDef<F>,
+  ): ResourceReader<F> {
+    return this.store.get_resource_reader(def);
+  }
+
+  public set_resource<F extends ComponentFields>(
+    def: ResourceDef<F>,
+    values: FieldValues<F>,
+  ): void {
+    this.store
+      .get_resource_channel(def)
+      .write(values as Record<string, number>);
+  }
+
+  public create_entity(): EntityID {
     return this.store.create_entity();
   }
 
-  destroy_entity(id: EntityID): void {
+  public destroy_entity(id: EntityID): void {
     this.store.destroy_entity_deferred(id);
   }
 
-  is_alive(id: EntityID): boolean {
+  public is_alive(id: EntityID): boolean {
     return this.store.is_alive(id);
   }
 
-  get entity_count(): number {
+  public get entity_count(): number {
     return this.store.entity_count;
   }
 
-  add_component(entity_id: EntityID, def: ComponentDef<readonly []>): void;
-  add_component<F extends ComponentFields>(
+  public add_component(
+    entity_id: EntityID,
+    def: ComponentDef<readonly []>,
+  ): void;
+  public add_component<F extends ComponentFields>(
     entity_id: EntityID,
     def: ComponentDef<F>,
     values: FieldValues<F>,
   ): void;
-  add_component(
+  public add_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentFields>,
     values?: Record<string, number>,
@@ -158,7 +201,7 @@ export class World implements QueryResolver {
     this.store.add_component(entity_id, def, values ?? EMPTY_VALUES);
   }
 
-  add_components(
+  public add_components(
     entity_id: EntityID,
     entries: {
       def: ComponentDef<ComponentFields>;
@@ -168,7 +211,7 @@ export class World implements QueryResolver {
     this.store.add_components(entity_id, entries);
   }
 
-  remove_component(
+  public remove_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentFields>,
   ): this {
@@ -176,21 +219,21 @@ export class World implements QueryResolver {
     return this;
   }
 
-  remove_components(
+  public remove_components(
     entity_id: EntityID,
     ...defs: ComponentDef<ComponentFields>[]
   ): void {
     this.store.remove_components(entity_id, defs);
   }
 
-  has_component(
+  public has_component(
     entity_id: EntityID,
     def: ComponentDef<ComponentFields>,
   ): boolean {
     return this.store.has_component(entity_id, def);
   }
 
-  get_field<F extends ComponentFields>(
+  public get_field<F extends ComponentFields>(
     def: ComponentDef<F>,
     entity_id: EntityID,
     field: F[number],
@@ -200,12 +243,12 @@ export class World implements QueryResolver {
     return arch.read_field(row, def as unknown as ComponentID, field);
   }
 
-  emit(def: EventDef<readonly []>): void;
-  emit<F extends ComponentFields>(
+  public emit(def: EventDef<readonly []>): void;
+  public emit<F extends ComponentFields>(
     def: EventDef<F>,
     values: FieldValues<F>,
   ): void;
-  emit(
+  public emit(
     def: EventDef<ComponentFields>,
     values?: Record<string, number>,
   ): void {
@@ -216,7 +259,9 @@ export class World implements QueryResolver {
     }
   }
 
-  query<T extends ComponentDef<ComponentFields>[]>(...defs: T): Query<T> {
+  public query<T extends ComponentDef<ComponentFields>[]>(
+    ...defs: T
+  ): Query<T> {
     // Reuse scratch_mask to avoid allocating a new BitSet per query call.
     // Zero it out, set bits, then copy for the cache key.
     const mask = this.scratch_mask;
@@ -228,7 +273,7 @@ export class World implements QueryResolver {
   }
 
   /** QueryResolver implementation — creates or retrieves a cached Query. */
-  _resolve_query(
+  public _resolve_query(
     include: BitSet,
     exclude: BitSet | null,
     any_of: BitSet | null,
@@ -241,8 +286,8 @@ export class World implements QueryResolver {
     const any_hash = any_of ? any_of.hash() : 0;
     const key =
       (inc_hash ^
-        Math.imul(exc_hash, 0x9e3779b9) ^
-        Math.imul(any_hash, 0x517cc1b7)) |
+        Math.imul(exc_hash, HASH_GOLDEN_RATIO) ^
+        Math.imul(any_hash, HASH_SECONDARY_PRIME)) |
       0;
 
     const cached = this._find_cached(key, include, exclude, any_of);
@@ -303,7 +348,7 @@ export class World implements QueryResolver {
    * Register a system with a typed query.
    *
    *   world.register_system(
-   *     (q, ctx, dt) => q.each((pos, vel, n) => { ... }),
+   *     (q, ctx, dt) => { for (const arch of q) { ... } },
    *     (qb) => qb.every(Pos, Vel),
    *   );
    *
@@ -311,12 +356,13 @@ export class World implements QueryResolver {
    *
    *   world.register_system({ fn(ctx, dt) { ... } });
    */
-  register_system<Defs extends readonly ComponentDef<ComponentFields>[]>(
+  public register_system<Defs extends readonly ComponentDef<ComponentFields>[]>(
     fn: (q: Query<Defs>, ctx: SystemContext, dt: number) => void,
     query_fn: (qb: QueryBuilder) => Query<Defs>,
   ): SystemDescriptor;
-  register_system(config: SystemConfig): SystemDescriptor;
-  register_system(
+  public register_system(config: SystemConfig): SystemDescriptor;
+  // any: overload implementation must unify Query<Defs> (first overload) with SystemConfig (second)
+  public register_system(
     fn_or_config:
       | ((q: Query<any>, ctx: SystemContext, dt: number) => void)
       | SystemConfig,
@@ -328,6 +374,7 @@ export class World implements QueryResolver {
       // Resolve the query once at registration time, then close over it.
       // The system's fn(ctx, dt) wrapper captures the resolved query and
       // ctx so the schedule only needs to call fn(ctx, dt) each frame.
+      // ! safe: this branch only runs for the (fn, query_fn) overload
       const q = query_fn!(new QueryBuilder(this));
       const ctx = this.ctx;
       config = { fn: (_ctx, dt) => fn_or_config(q, ctx, dt) };
@@ -343,7 +390,7 @@ export class World implements QueryResolver {
     return descriptor;
   }
 
-  add_systems(
+  public add_systems(
     label: SCHEDULE,
     ...entries: (SystemDescriptor | SystemEntry)[]
   ): this {
@@ -351,28 +398,26 @@ export class World implements QueryResolver {
     return this;
   }
 
-  remove_system(system: SystemDescriptor): void {
+  public remove_system(system: SystemDescriptor): void {
     this.schedule.remove_system(system);
     system.on_removed?.();
     this.systems.delete(system);
   }
 
-  get system_count(): number {
+  public get system_count(): number {
     return this.systems.size;
   }
 
-  startup(): void {
+  public startup(): void {
     for (const descriptor of this.systems.values()) {
       descriptor.on_added?.(this.store);
     }
     this.schedule.run_startup(this.ctx);
   }
 
-  update(delta_time: number): void {
-    this.store.clear_events();
-
+  public update(dt: number): void {
     if (this.schedule.has_fixed_systems()) {
-      this._accumulator += delta_time;
+      this._accumulator += dt;
       const max_acc = this._max_fixed_steps * this._fixed_timestep;
       if (this._accumulator > max_acc) {
         this._accumulator = max_acc;
@@ -383,14 +428,15 @@ export class World implements QueryResolver {
       }
     }
 
-    this.schedule.run_update(this.ctx, delta_time);
+    this.schedule.run_update(this.ctx, dt);
+    this.store.clear_events();
   }
 
-  flush(): void {
+  public flush(): void {
     this.ctx.flush();
   }
 
-  dispose(): void {
+  public dispose(): void {
     for (const descriptor of this.systems.values()) {
       descriptor.dispose?.();
       descriptor.on_removed?.();

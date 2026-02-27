@@ -45,6 +45,12 @@ import {
   type EventDef,
   type EventReader,
 } from "./event";
+import {
+  ResourceChannel,
+  as_resource_id,
+  type ResourceDef,
+  type ResourceReader,
+} from "./resource";
 import { unsafe_cast, BitSet } from "type_primitives";
 import {
   Archetype,
@@ -54,9 +60,14 @@ import {
 } from "./archetype";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { bucket_push } from "./utils/arrays";
-
-const UNASSIGNED = -1;
-const EMPTY_VALUES: Record<string, number> = Object.freeze(Object.create(null));
+import {
+  UNASSIGNED,
+  NO_SWAP,
+  EMPTY_VALUES,
+  BITS_PER_WORD_SHIFT,
+  BITS_PER_WORD_MASK,
+  INITIAL_GENERATION,
+} from "./utils/constants";
 
 interface ComponentMeta {
   field_names: string[];
@@ -67,33 +78,39 @@ export class Store {
   // --- Entity ID management ---
   // Generational slot allocator: entity_generations[index] holds the current
   // generation for that slot. Free indices are recycled via a stack.
-  private entity_generations: number[] = [];
+  private readonly entity_generations: number[] = [];
   private entity_high_water = 0;
-  private entity_free_indices: number[] = [];
+  private readonly entity_free_indices: number[] = [];
   private entity_alive_count = 0;
 
   // --- Component metadata ---
   // Parallel array indexed by ComponentID: field_names and field_index
   // for building archetype column layouts.
-  private component_metas: ComponentMeta[] = [];
+  private readonly component_metas: ComponentMeta[] = [];
   private component_count = 0;
 
   // --- Event channels ---
   // Parallel array indexed by EventID: each channel holds SoA columns + reader.
-  private event_channels: EventChannel[] = [];
+  private readonly event_channels: EventChannel[] = [];
   private event_count = 0;
 
+  // --- Resource channels ---
+  // Parallel array indexed by ResourceID: each channel holds a single row of SoA columns.
+  private readonly resource_channels: ResourceChannel[] = [];
+  private resource_count = 0;
+
   // --- Archetype management ---
-  private archetypes: Archetype[] = [];
+  private readonly archetypes: Archetype[] = [];
   // Hash-bucketed lookup: BitSet.hash() → ArchetypeID[] for deduplication
-  private archetype_map: Map<number, ArchetypeID[]> = new Map();
+  private readonly archetype_map: Map<number, ArchetypeID[]> = new Map();
   private next_archetype_id = 0;
   // Inverted index: ComponentID → set of ArchetypeIDs containing that component.
   // Used by get_matching_archetypes to start from the smallest set.
-  private component_index: Map<ComponentID, Set<ArchetypeID>> = new Map();
+  private readonly component_index: Map<ComponentID, Set<ArchetypeID>> =
+    new Map();
   // Registered queries: the Store pushes newly-created archetypes into matching
   // query result arrays, so queries are always up-to-date.
-  private registered_queries: {
+  private readonly registered_queries: {
     include_mask: BitSet;
     exclude_mask: BitSet | null;
     any_of_mask: BitSet | null;
@@ -102,19 +119,19 @@ export class Store {
   private empty_archetype_id: ArchetypeID;
 
   // entity_index → ArchetypeID (UNASSIGNED = not in any archetype)
-  private entity_archetype: number[] = [];
+  private readonly entity_archetype: number[] = [];
   // entity_index → row within its archetype (UNASSIGNED = no row)
-  private entity_row: number[] = [];
+  private readonly entity_row: number[] = [];
 
   // --- Deferred operation buffers ---
   // Flat parallel arrays: pending_add_ids[i], pending_add_defs[i], pending_add_values[i]
   // describe one deferred add. No per-operation object allocation.
-  private pending_destroy: EntityID[] = [];
-  private pending_add_ids: EntityID[] = [];
-  private pending_add_defs: ComponentDef<ComponentFields>[] = [];
-  private pending_add_values: Record<string, number>[] = [];
-  private pending_remove_ids: EntityID[] = [];
-  private pending_remove_defs: ComponentDef<ComponentFields>[] = [];
+  private readonly pending_destroy: EntityID[] = [];
+  private readonly pending_add_ids: EntityID[] = [];
+  private readonly pending_add_defs: ComponentDef<ComponentFields>[] = [];
+  private readonly pending_add_values: Record<string, number>[] = [];
+  private readonly pending_remove_ids: EntityID[] = [];
+  private readonly pending_remove_defs: ComponentDef<ComponentFields>[] = [];
 
   constructor() {
     this.empty_archetype_id = this.arch_get_or_create_from_mask(new BitSet());
@@ -259,12 +276,13 @@ export class Store {
     let generation: number;
 
     if (this.entity_free_indices.length > 0) {
+      // ! safe: length > 0 guarantees pop() returns a value
       index = this.entity_free_indices.pop()!;
       generation = this.entity_generations[index];
     } else {
       index = this.entity_high_water++;
-      this.entity_generations[index] = 0;
-      generation = 0;
+      this.entity_generations[index] = INITIAL_GENERATION;
+      generation = INITIAL_GENERATION;
     }
 
     this.entity_alive_count++;
@@ -291,7 +309,7 @@ export class Store {
       const arch = this.arch_get(this.entity_archetype[index] as ArchetypeID);
       // swap-and-pop returns the entity_index that was swapped into our row
       const swapped_idx = arch.remove_entity(row);
-      if (swapped_idx !== -1) this.entity_row[swapped_idx] = row;
+      if (swapped_idx !== NO_SWAP) this.entity_row[swapped_idx] = row;
     }
 
     this.entity_archetype[index] = UNASSIGNED;
@@ -355,7 +373,7 @@ export class Store {
         const sw = arch.has_columns
           ? arch.remove_entity(row)
           : arch.remove_entity_tag(row);
-        if (sw !== -1) ent_row[sw] = row;
+        if (sw !== NO_SWAP) ent_row[sw] = row;
       }
 
       ent_arch[idx] = UNASSIGNED;
@@ -460,7 +478,7 @@ export class Store {
         const sw = tag_only
           ? src.remove_entity_tag(src_row)
           : src.remove_entity(src_row);
-        if (sw !== -1) ent_row[sw] = src_row;
+        if (sw !== NO_SWAP) ent_row[sw] = src_row;
       }
 
       // Write the new component's field values
@@ -513,7 +531,7 @@ export class Store {
       const sw = tag_only
         ? src.remove_entity_tag(src_row)
         : src.remove_entity(src_row);
-      if (sw !== -1) ent_row[sw] = src_row;
+      if (sw !== NO_SWAP) ent_row[sw] = src_row;
 
       ent_arch[idx] = tgt_id;
       ent_row[idx] = dst_row;
@@ -595,7 +613,7 @@ export class Store {
     if (src_row !== UNASSIGNED) {
       target_arch.copy_shared_from(current_arch, src_row, dst_row);
       const swapped_idx = current_arch.remove_entity(src_row);
-      if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+      if (swapped_idx !== NO_SWAP) this.entity_row[swapped_idx] = src_row;
     }
     target_arch.write_fields(
       dst_row,
@@ -644,7 +662,7 @@ export class Store {
       if (src_row !== UNASSIGNED) {
         target_arch.copy_shared_from(source_arch, src_row, dst_row);
         const swapped_idx = source_arch.remove_entity(src_row);
-        if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+        if (swapped_idx !== NO_SWAP) this.entity_row[swapped_idx] = src_row;
       }
       for (let i = 0; i < entries.length; i++) {
         target_arch.write_fields(
@@ -699,7 +717,7 @@ export class Store {
     target_arch.copy_shared_from(current_arch, src_row, dst_row);
 
     const swapped_idx = current_arch.remove_entity(src_row);
-    if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+    if (swapped_idx !== NO_SWAP) this.entity_row[swapped_idx] = src_row;
 
     this.entity_archetype[entity_index] = target_archetype_id;
     this.entity_row[entity_index] = dst_row;
@@ -741,7 +759,7 @@ export class Store {
     target_arch.copy_shared_from(source_arch, src_row, dst_row);
 
     const swapped_idx = source_arch.remove_entity(src_row);
-    if (swapped_idx !== -1) this.entity_row[swapped_idx] = src_row;
+    if (swapped_idx !== NO_SWAP) this.entity_row[swapped_idx] = src_row;
 
     this.entity_archetype[entity_index] = target_archetype_id;
     this.entity_row[entity_index] = dst_row;
@@ -813,11 +831,11 @@ export class Store {
     for (let wi = 0; wi < words.length; wi++) {
       let word = words[wi];
       if (word === 0) continue;
-      const base = wi << 5;
+      const base = wi << BITS_PER_WORD_SHIFT;
       while (word !== 0) {
         // Extract lowest set bit
         const t = word & (-word >>> 0);
-        const bit = base + (31 - Math.clz32(t));
+        const bit = base + (BITS_PER_WORD_MASK - Math.clz32(t));
         word ^= t;
         const set = this.component_index.get(bit as ComponentID);
         if (!set || set.size === 0) {
@@ -868,7 +886,7 @@ export class Store {
     return result;
   }
 
-  get archetype_count(): number {
+  public get archetype_count(): number {
     return this.archetypes.length;
   }
 
@@ -876,9 +894,7 @@ export class Store {
   // Event channels
   // =======================================================
 
-  public register_event<F extends readonly string[]>(
-    fields: F,
-  ): EventDef<F> {
+  public register_event<F extends readonly string[]>(fields: F): EventDef<F> {
     const id = as_event_id(this.event_count++);
     const channel = new EventChannel(fields as unknown as string[]);
     this.event_channels.push(channel);
@@ -899,7 +915,8 @@ export class Store {
   public get_event_reader<F extends ComponentFields>(
     def: EventDef<F>,
   ): EventReader<F> {
-    return this.event_channels[def as unknown as number].reader as EventReader<F>;
+    return this.event_channels[def as unknown as number]
+      .reader as EventReader<F>;
   }
 
   public clear_events(): void {
@@ -907,5 +924,50 @@ export class Store {
     for (let i = 0; i < channels.length; i++) {
       channels[i].clear();
     }
+  }
+
+  // =======================================================
+  // Resource channels
+  // =======================================================
+
+  public register_resource<F extends readonly string[]>(
+    fields: F,
+    initial: Record<string, number>,
+  ): ResourceDef<F> {
+    const id = as_resource_id(this.resource_count++);
+    const channel = new ResourceChannel(fields as unknown as string[], initial);
+    this.resource_channels.push(channel);
+    return unsafe_cast<ResourceDef<F>>(id);
+  }
+
+  public get_resource_reader<F extends ComponentFields>(
+    def: ResourceDef<F>,
+  ): ResourceReader<F> {
+    if (__DEV__) {
+      const idx = def as unknown as number;
+      if (idx < 0 || idx >= this.resource_channels.length) {
+        throw new ECSError(
+          ECS_ERROR.RESOURCE_NOT_REGISTERED,
+          `Resource with ID ${idx} not registered`,
+        );
+      }
+    }
+    return this.resource_channels[def as unknown as number]
+      .reader as ResourceReader<F>;
+  }
+
+  public get_resource_channel(
+    def: ResourceDef<ComponentFields>,
+  ): ResourceChannel {
+    if (__DEV__) {
+      const idx = def as unknown as number;
+      if (idx < 0 || idx >= this.resource_channels.length) {
+        throw new ECSError(
+          ECS_ERROR.RESOURCE_NOT_REGISTERED,
+          `Resource with ID ${idx} not registered`,
+        );
+      }
+    }
+    return this.resource_channels[def as unknown as number];
   }
 }

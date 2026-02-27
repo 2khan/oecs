@@ -1,0 +1,98 @@
+# Queries
+
+## Creating Queries
+
+`world.query()` returns a cached, live view over all archetypes matching the given components.
+
+```ts
+const q = world.query(Pos, Vel);
+```
+
+Queries are live -- as new archetypes are created, matching ones are automatically added to the query's result set. Component order doesn't matter: `query(Pos, Vel)` and `query(Vel, Pos)` produce the same result.
+
+## Iterating with `for..of`
+
+Use `for..of` to iterate non-empty matching archetypes. Access columns via `get_column_group()` (all fields) or `get_column()` (single field), then write the inner loop over `arch.entity_count`.
+
+```ts
+for (const arch of q) {
+  const pos = arch.get_column_group(Pos); // { x: number[], y: number[] }
+  const vel = arch.get_column_group(Vel); // { vx: number[], vy: number[] }
+  for (let i = 0; i < arch.entity_count; i++) {
+    pos.x[i] += vel.vx[i];
+    pos.y[i] += vel.vy[i];
+  }
+}
+```
+
+The iterator skips empty archetypes automatically.
+
+For per-field access, use `get_column()`:
+
+```ts
+for (const arch of q) {
+  const px = arch.get_column(Pos, "x");
+  const py = arch.get_column(Pos, "y");
+  for (let i = 0; i < arch.entity_count; i++) {
+    px[i] += 1;
+    py[i] += 1;
+  }
+}
+```
+
+## Query Chaining
+
+Queries compose immutably -- each method returns a new (cached) query.
+
+```ts
+// Extend required components
+const q = world.query(Position).and(Velocity);
+
+// Exclude archetypes that have a component
+const alive = world.query(Position).not(Dead);
+
+// Require at least one of these
+const damaged = world.query(Health).or(Poison, Fire);
+
+// Combine
+const targets = world.query(Position).and(Health).not(Shield).or(IsEnemy, IsBoss);
+```
+
+## Query Count
+
+```ts
+q.count();  // total entity count across all matching archetypes
+q.length;   // number of matching archetypes (including empty ones)
+```
+
+## QueryBuilder
+
+Used inside `register_system` to resolve a query once at registration time:
+
+```ts
+const moveSys = world.register_system(
+  (q, ctx, dt) => {
+    for (const arch of q) {
+      const pos = arch.get_column_group(Pos);
+      const vel = arch.get_column_group(Vel);
+      for (let i = 0; i < arch.entity_count; i++) {
+        pos.x[i] += vel.vx[i] * dt;
+        pos.y[i] += vel.vy[i] * dt;
+      }
+    }
+  },
+  (qb) => qb.every(Pos, Vel),
+);
+```
+
+The query is captured in the closure and reused every frame. For systems that don't need a query, use the config object overload:
+
+```ts
+const logSys = world.register_system({
+  fn(ctx, dt) { console.log("frame", dt); },
+});
+```
+
+## Query Caching
+
+Queries with identical masks (include, exclude, any_of) return the same cached instance. The cache uses hash-bucketed deduplication with golden-ratio xor multipliers, with exact `BitSet.equals()` matching within buckets.

@@ -14,30 +14,33 @@ This document explains the internal design of OECS: how data is stored, how enti
 8. [Systems and scheduling](#systems-and-scheduling)
 9. [Deferred operations](#deferred-operations)
 10. [Events](#events)
-11. [World facade](#world-facade)
-12. [Type primitives](#type-primitives)
-13. [Dev/Prod guards](#devprod-guards)
+11. [Resources](#resources)
+12. [Refs](#refs)
+13. [World facade](#world-facade)
+14. [Type primitives](#type-primitives)
+15. [Dev/Prod guards](#devprod-guards)
 
 ---
 
 ## Overview
 
 ```
-World (public API facade)
+ECS (public API facade)
   ├── Store (data orchestrator)
   │     ├── Entity slot allocator (generational IDs)
   │     ├── Component metadata registry
   │     ├── Archetype graph (BitSet masks, edge cache)
   │     ├── Entity → archetype/row mapping
   │     ├── Deferred operation buffers
-  │     └── Event channels
+  │     ├── Event channels
+  │     └── Resource channels
   ├── Schedule (system execution)
   │     └── Per-phase topological sort (Kahn's algorithm)
   └── SystemContext (system interface)
-        └── Deferred add/remove/destroy + event emit/read
+        └── Deferred add/remove/destroy + event emit/read + resources + refs
 ```
 
-External code talks to **World**. Systems receive a **SystemContext**. The Store and Schedule are never exposed outside World.
+External code talks to **ECS** (the world facade). Systems receive a **SystemContext**. The Store and Schedule are never exposed outside ECS.
 
 ---
 
@@ -168,7 +171,7 @@ interface ArchetypeColumnGroup {
 }
 ```
 
-The `record` object is what `query.each()` passes to system callbacks — it's a pre-built `{ fieldName: column }` mapping.
+The `record` object is what `arch.get_column_group()` returns — a pre-built `{ fieldName: column }` mapping.
 
 Column groups are stored in a **sparse array** indexed by `ComponentID`:
 
@@ -320,9 +323,8 @@ Step 4 is what makes queries "live": they never go stale because the Store eager
 A `Query<Defs>` holds:
 
 - A reference to a live `Archetype[]` (owned by the Store's registered_queries)
-- The component defs it was created with (for `each()` column group lookup)
+- The component defs it was created with
 - The include/exclude/any_of BitSet masks (for composing new queries via `and`/`not`/`or`)
-- A pre-allocated `_args_buf` array (avoids allocation in the `each()` hot path)
 
 ### Query caching
 
@@ -340,21 +342,22 @@ key = (inc_hash ^ imul(exc_hash, 0x9e3779b9) ^ imul(any_hash, 0x517cc1b7)) | 0;
 
 Within a bucket, entries are matched by exact `BitSet.equals()` on all three masks.
 
-### `each()` iteration
+### `for..of` iteration
+
+Queries implement `Symbol.iterator`, yielding non-empty archetypes:
 
 ```ts
-each(fn):
-  for each archetype:
-    if archetype.entity_count === 0: skip
-    for each component def:
-      args_buf[i] = archetype.get_column_group(def)  // { x: number[], y: number[] }
-    args_buf[last] = entity_count
-    fn.apply(null, args_buf)
+for (const arch of query) {
+  const pos = arch.get_column_group(Pos); // { x: number[], y: number[] }
+  const vel = arch.get_column_group(Vel);
+  for (let i = 0; i < arch.entity_count; i++) {
+    pos.x[i] += vel.vx[i];
+    pos.y[i] += vel.vy[i];
+  }
+}
 ```
 
-The pre-allocated `args_buf` avoids creating a new array per archetype. `apply` spreads it as individual function arguments.
-
-The system callback receives typed column-group objects (thanks to the `DefsToColumns` mapped type) and the entity count. The system is responsible for the inner `for` loop — this design pushes one function call per archetype instead of per entity.
+The iterator skips archetypes with zero entities. Systems access column groups via `arch.get_column_group(def)` or individual columns via `arch.get_column(def, field)`, then write the inner loop over `arch.entity_count`.
 
 ### `count()`
 
@@ -590,16 +593,85 @@ Events are cleared at the start of `world.update()` via `store.clear_events()`, 
 
 ---
 
+## Resources
+
+**File:** `src/resource.ts`
+
+Resources are typed global singletons — time, input state, camera config. Unlike events (which are growable SoA channels), a resource is a single row of SoA columns.
+
+### ResourceChannel
+
+```ts
+class ResourceChannel {
+  field_names: string[];
+  columns: number[][];    // each column has exactly 1 element (index 0)
+  reader: ResourceReader; // property getters on column[0]
+}
+```
+
+The `reader` object has `Object.defineProperty` getters on each field name. `reader.delta` calls `get() { return col[0]; }`, returning a scalar number — not an array. This makes reads zero-copy and immediately reflect writes.
+
+### Write path
+
+`ResourceChannel.write(values)` iterates field names and writes `columns[i][0] = values[fieldName]`. Changes are immediate (not deferred).
+
+### Per-field access
+
+`SystemContext` exposes `get_resource_field(def, field)` and `set_resource_field(def, field, value)` for accessing individual fields without constructing a values object.
+
+---
+
+## Refs
+
+**File:** `src/ref.ts`
+
+A `ComponentRef<F>` provides typed get/set properties that read and write directly into SoA column arrays. The archetype + row + column lookup is performed once at creation; subsequent field access is a single `columns[col_idx][row]` operation.
+
+### Prototype caching
+
+Prototypes are cached per column group via a `WeakMap<RefColumnGroup, object>`:
+
+```ts
+const ref_proto_cache = new WeakMap<RefColumnGroup, object>();
+```
+
+When `create_ref(group, row)` is called:
+
+1. Check cache for existing prototype
+2. If miss: build prototype with `Object.defineProperty` for each field — getters/setters read `this._columns[col_idx][this._row]`
+3. Cache the prototype keyed by column group identity
+4. `Object.create(proto)` + set `_columns` and `_row`
+
+Creating a ref is just `Object.create(proto) + 2 property writes` — no closure allocation, no defineProperty loop per call.
+
+### RefInternal
+
+The internal shape of a ref instance:
+
+```ts
+interface RefInternal {
+  _columns: number[][];  // the column group's backing arrays
+  _row: number;          // entity's row in the archetype
+}
+```
+
+### Safety
+
+Refs are safe inside systems because structural changes are deferred. The entity cannot move archetypes until `ctx.flush()`. Do not hold refs across flush boundaries.
+
+---
+
 ## World facade
 
-**File:** `src/world.ts`
+**File:** `src/ecs.ts`
 
-World composes Store, Schedule, and SystemContext into a single public API. It:
+ECS composes Store, Schedule, and SystemContext into a single public API. It:
 
 1. **Delegates data operations** to Store (create_entity, add_component, etc.)
 2. **Owns the query cache** — implements `QueryResolver` so queries created via `query()`, `QueryBuilder`, and `Query.and()/not()/or()` all share the same cache
 3. **Manages system lifecycle** — registration, scheduling, startup, update, dispose
-4. **Hides internals** — the Store and Schedule instances are private. Systems interact only through the SystemContext they receive as `ctx`
+4. **Delegates resource operations** — `register_resource`, `resource()`, `set_resource()` forward to Store's resource channels
+5. **Hides internals** — the Store and Schedule instances are private. Systems interact only through the SystemContext they receive as `ctx`
 
 ### Convenience methods
 
