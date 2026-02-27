@@ -427,7 +427,7 @@ A system is defined by a `SystemConfig`:
 ```ts
 interface SystemConfig {
   fn: (ctx: SystemContext, dt: number) => void;
-  on_added?: (store: Store) => void;
+  on_added?: (ctx: SystemContext) => void;
   on_removed?: () => void;
   dispose?: () => void;
 }

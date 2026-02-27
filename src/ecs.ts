@@ -10,7 +10,7 @@
  * - Entities are generational IDs (no object allocation)
  * - Components are typed array columns grouped by archetype
  * - Queries are cached and live-updated as new archetypes appear
- * - Systems are plain functions scheduled across 6 lifecycle phases
+ * - Systems are plain functions scheduled across 7 lifecycle phases
  *
  * Usage:
  *

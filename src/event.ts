@@ -3,7 +3,7 @@
  *
  * Events are fire-and-forget messages that systems emit within a frame
  * and other systems can read during the same frame. They are auto-cleared
- * at the start of each update cycle.
+ * at the end of each update cycle (after all phases have run).
  *
  * Events use SoA (Structure of Arrays) layout matching the component
  * pattern: each field is a separate number[] column, and a shared reader

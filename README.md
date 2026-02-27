@@ -15,7 +15,7 @@ A fast, minimal archetype-based Entity Component System written in TypeScript.
 ## Quick start
 
 ```ts
-import { ECS, SCHEDULE } from "@oasys/oecs-typed2";
+import { ECS, SCHEDULE } from "@oasys/oecs";
 
 const world = new ECS();
 
@@ -92,7 +92,7 @@ const IsEnemy  = world.register_tag();
 
 Supported typed array tags: `"f32"`, `"f64"`, `"i8"`, `"i16"`, `"i32"`, `"u8"`, `"u16"`, `"u32"`.
 
-Add components individually or in batch (single archetype transition):
+Add components individually or via `add_components` (single archetype transition):
 
 ```ts
 world.add_component(e, Position, { x: 10, y: 20 });
@@ -125,7 +125,7 @@ for (const arch of q) {
 }
 
 // Chaining
-const targets = world.query(Position).and(Health).not(Shield).or(IsEnemy, IsBoss);
+const targets = world.query(Position).and(Health).not(Shield).any_of(IsEnemy, IsBoss);
 ```
 
 See [docs/api/queries.md](docs/api/queries.md) for full API.
@@ -267,6 +267,8 @@ pnpm build         # vite library build
 pnpm tsc --noEmit  # type check
 ```
 
-## Architecture
+## Guides
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for internal design details.
+- [Getting Started](docs/GETTING_STARTED.md) — step-by-step tutorial
+- [Best Practices](docs/BEST_PRACTICES.md) — performance tips and patterns
+- [Architecture](docs/ARCHITECTURE.md) — internal design details

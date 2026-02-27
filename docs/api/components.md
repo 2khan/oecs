@@ -62,7 +62,7 @@ world.add_component(e, Pos, { x: 10, y: 20 });
 world.add_component(e, Pos, { x: 99, y: 0 }); // overwrites, no transition
 ```
 
-## Batch Add
+## Adding Multiple Components
 
 `add_components` resolves the final archetype first, then performs a single entity move instead of intermediate transitions per component.
 
@@ -91,13 +91,39 @@ world.add_component(e, Pos, { x: 0, y: 0 }).add_component(e, Vel, { vx: 1, vy: 2
 world.remove_component(e, Vel).remove_component(e, Frozen);
 ```
 
-Batch removal avoids intermediate archetype transitions:
+`remove_components` avoids intermediate archetype transitions:
 
 ```ts
 world.remove_components(e, Pos, Vel, IsEnemy);
 ```
 
 Removing a component the entity does not have is a no-op.
+
+## Bulk Operations
+
+`batch_add_component` and `batch_remove_component` operate on ALL entities in an archetype at once. Instead of moving entities one by one (O(N×columns)), they use `TypedArray.set()` for a single O(columns) bulk copy.
+
+```ts
+const Burning = world.register_tag();
+const Shield = world.register_component({ strength: "f32" });
+
+// Add Burning to every entity that has Health
+for (const arch of world.query(Health)) {
+  world.batch_add_component(arch, Burning);
+}
+
+// Give every enemy a shield
+for (const arch of world.query(IsEnemy)) {
+  world.batch_add_component(arch, Shield, { strength: 50 });
+}
+
+// Strip shields from all enemies
+for (const arch of world.query(IsEnemy, Shield)) {
+  world.batch_remove_component(arch, Shield);
+}
+```
+
+After a bulk operation, the source archetype is emptied — all its entities move to the target archetype. If the archetype already has the component (for add) or doesn't have it (for remove), the call is a no-op.
 
 ## Checking Components
 

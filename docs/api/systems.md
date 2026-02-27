@@ -115,7 +115,7 @@ Flush is called automatically after each schedule phase. Manual flush is useful 
 const sys = world.register_system({
   fn(ctx, dt) { /* runs every frame */ },
 
-  on_added(store) {
+  on_added(ctx) {
     // Called once during world.startup()
   },
 
