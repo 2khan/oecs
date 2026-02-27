@@ -40,7 +40,7 @@ describe("ComponentRef (ctx.ref)", () => {
     world.startup();
     world.update(0);
 
-    ctx.set_field(Pos, e, "x", 99);
+    ctx.set_field(e, Pos, "x", 99);
     const pos = ctx.ref(Pos, e);
     expect(pos.x).toBe(99);
     expect(pos.y).toBe(2);
@@ -66,8 +66,8 @@ describe("ComponentRef (ctx.ref)", () => {
     pos.x = 42;
     pos.y = 84;
 
-    expect(ctx.get_field(Pos, e, "x")).toBe(42);
-    expect(ctx.get_field(Pos, e, "y")).toBe(84);
+    expect(ctx.get_field(e, Pos, "x")).toBe(42);
+    expect(ctx.get_field(e, Pos, "y")).toBe(84);
   });
 
   it("supports compound assignment operators", () => {
@@ -188,7 +188,7 @@ describe("ComponentRef (ctx.ref)", () => {
     expect(pos.x).toBe(0);
 
     // Write via set_field, read through existing ref
-    ctx.set_field(Pos, e, "x", 77);
+    ctx.set_field(e, Pos, "x", 77);
     expect(pos.x).toBe(77);
   });
 
@@ -247,8 +247,8 @@ describe("ComponentRef (ctx.ref)", () => {
 
     // After flush (update completes), the entity moved to [Pos, Vel]
     // and the written value was carried over via copy_shared_from
-    expect(world.get_field(Pos, e, "x")).toBe(99);
-    expect(world.get_field(Vel, e, "vx")).toBe(1);
+    expect(world.get_field(e, Pos, "x")).toBe(99);
+    expect(world.get_field(e, Vel, "vx")).toBe(1);
   });
 
   it("ref remains valid after deferred remove_component", () => {
@@ -283,7 +283,7 @@ describe("ComponentRef (ctx.ref)", () => {
 
     // After flush, entity is in [Pos] — Vel is gone
     expect(world.has_component(e, Vel)).toBe(false);
-    expect(world.get_field(Pos, e, "x")).toBe(5);
+    expect(world.get_field(e, Pos, "x")).toBe(5);
   });
 
   it("ref remains valid after deferred destroy_entity", () => {
@@ -354,9 +354,9 @@ describe("ComponentRef (ctx.ref)", () => {
     expect(vel_vx).toBe(3);
 
     // After flush, values carried over to new archetype [Pos, Vel, Health]
-    expect(world.get_field(Pos, e, "x")).toBe(4);
-    expect(world.get_field(Pos, e, "y")).toBe(6);  // 2 + 4
-    expect(world.get_field(Health, e, "hp")).toBe(100);
+    expect(world.get_field(e, Pos, "x")).toBe(4);
+    expect(world.get_field(e, Pos, "y")).toBe(6);  // 2 + 4
+    expect(world.get_field(e, Health, "hp")).toBe(100);
   });
 
   //=========================================================

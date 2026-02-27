@@ -274,7 +274,7 @@ describe("Tag components", () => {
     const q = world.query(Pos);
 
     // Destroy entity to leave archetype empty
-    world.destroy_entity(e1);
+    world.destroy_entity_deferred(e1);
     world.flush();
 
     const iterated: any[] = [];
@@ -300,10 +300,10 @@ describe("Tag components", () => {
 
     const q = world.query(Pos);
     // Two archetypes contain Pos
-    expect(q.length).toBe(2);
+    expect(q.archetype_count).toBe(2);
 
     // Destroy e1 to empty one archetype
-    world.destroy_entity(e1);
+    world.destroy_entity_deferred(e1);
     world.flush();
 
     // Iterator should skip the empty one

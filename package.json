@@ -1,6 +1,6 @@
 {
   "name": "@oasys/oecs",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Archetype-based Entity Component System",
   "type": "module",
   "exports": {

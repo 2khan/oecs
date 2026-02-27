@@ -1,7 +1,7 @@
 /***
  * ComponentRef — Cached single-entity field accessor.
  *
- * A ComponentRef<F> provides typed get/set properties that read and write
+ * A ComponentRef<S> provides typed get/set properties that read and write
  * directly into SoA column arrays. The archetype + row + column lookup is
  * performed once at creation; subsequent field access is a single
  * columns[col_idx][row] operation.
@@ -22,23 +22,24 @@
  *
  ***/
 
-import type { ComponentFields } from "./component";
+import type { ComponentSchema } from "./component";
 import type { ArchetypeColumnLayout } from "./archetype";
+import type { GrowableTypedArray, AnyTypedArray } from "type_primitives";
 
-/** Maps component fields to scalar get/set properties: { x: number, y: number }. */
-export type ComponentRef<F extends ComponentFields> = {
-  [K in F[number]]: number;
+/** Maps component schema to scalar get/set properties: { x: number, y: number }. */
+export type ComponentRef<S extends ComponentSchema> = {
+  [K in keyof S]: number;
 };
 
 interface RefInternal {
-  _columns: number[][];
+  _columns: AnyTypedArray[];
   _row: number;
 }
 
 /** Minimal column group shape needed by create_ref. */
 export interface RefColumnGroup {
   readonly layout: ArchetypeColumnLayout;
-  readonly columns: number[][];
+  readonly columns: GrowableTypedArray<AnyTypedArray>[];
 }
 
 // Keyed by column group identity (same object ref = same component in same archetype).
@@ -51,10 +52,10 @@ const ref_proto_cache = new WeakMap<RefColumnGroup, object>();
  * The prototype is built once per column group and cached; subsequent
  * calls for the same group only allocate a lightweight object.
  */
-export function create_ref<F extends ComponentFields>(
+export function create_ref<S extends ComponentSchema>(
   group: RefColumnGroup,
   row: number,
-): ComponentRef<F> {
+): ComponentRef<S> {
   let proto = ref_proto_cache.get(group);
   if (!proto) {
     proto = Object.create(null) as object;
@@ -72,7 +73,10 @@ export function create_ref<F extends ComponentFields>(
   }
 
   const ref: RefInternal = Object.create(proto);
-  ref._columns = group.columns;
+  // Extract raw typed array buffers for direct access
+  const bufs: AnyTypedArray[] = new Array(group.columns.length);
+  for (let i = 0; i < group.columns.length; i++) bufs[i] = group.columns[i].buf;
+  ref._columns = bufs;
   ref._row = row;
-  return ref as unknown as ComponentRef<F>;
+  return ref as unknown as ComponentRef<S>;
 }

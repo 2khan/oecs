@@ -97,7 +97,7 @@ export class Schedule {
         if (this.system_index.has(descriptor)) {
           throw new ECSError(
             ECS_ERROR.DUPLICATE_SYSTEM,
-            `System ${descriptor.id} is already scheduled`,
+            `System ${descriptor.name ?? descriptor.id} is already scheduled`,
           );
         }
       }
@@ -276,7 +276,7 @@ export class Schedule {
       const result_set = new Set(result);
       const remaining = nodes
         .filter((n) => !result_set.has(n.descriptor))
-        .map((n) => `system_${n.descriptor.id}`);
+        .map((n) => n.descriptor.name ?? `system_${n.descriptor.id}`);
 
       throw new ECSError(
         ECS_ERROR.CIRCULAR_SYSTEM_DEPENDENCY,

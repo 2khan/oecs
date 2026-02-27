@@ -18,7 +18,14 @@ export { Query, QueryBuilder } from "./query";
 export type { EntityID } from "./entity";
 
 // Components
-export type { ComponentDef, ComponentFields, FieldValues } from "./component";
+export type {
+  ComponentDef,
+  ComponentSchema,
+  ComponentFields,
+  FieldValues,
+  TagToTypedArray,
+  ColumnsForSchema,
+} from "./component";
 
 // Events
 export type { EventDef, EventReader } from "./event";

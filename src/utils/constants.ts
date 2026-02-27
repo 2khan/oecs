@@ -19,6 +19,9 @@ export const HASH_SECONDARY_PRIME = 0x517cc1b7;
 export const DEFAULT_INITIAL_CAPACITY = 16;
 export const GROWTH_FACTOR = 2;
 
+// Default archetype column capacity (user can override via WorldOptions.initial_capacity)
+export const DEFAULT_COLUMN_CAPACITY = 1024;
+
 // Resource singleton row index
 export const RESOURCE_ROW = 0;
 

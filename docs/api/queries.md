@@ -12,11 +12,11 @@ Queries are live -- as new archetypes are created, matching ones are automatical
 
 ## Iterating with `for..of`
 
-Use `for..of` to iterate non-empty matching archetypes. Access columns via `get_column()`, then write the inner loop over `arch.entity_count`.
+Use `for..of` to iterate non-empty matching archetypes. Access columns via `get_column()` (returns typed arrays like `Float64Array`, `Int32Array`, etc.), then write the inner loop over `arch.entity_count`.
 
 ```ts
 for (const arch of q) {
-  const px = arch.get_column(Pos, "x");
+  const px = arch.get_column(Pos, "x");   // Float64Array (or whatever the schema specifies)
   const py = arch.get_column(Pos, "y");
   const vx = arch.get_column(Vel, "vx");
   const vy = arch.get_column(Vel, "vy");
@@ -42,17 +42,17 @@ const q = world.query(Position).and(Velocity);
 const alive = world.query(Position).not(Dead);
 
 // Require at least one of these
-const damaged = world.query(Health).or(Poison, Fire);
+const damaged = world.query(Health).any_of(Poison, Fire);
 
 // Combine
-const targets = world.query(Position).and(Health).not(Shield).or(IsEnemy, IsBoss);
+const targets = world.query(Position).and(Health).not(Shield).any_of(IsEnemy, IsBoss);
 ```
 
 ## Query Count
 
 ```ts
 q.count();  // total entity count across all matching archetypes
-q.length;   // number of matching archetypes (including empty ones)
+q.archetype_count;  // number of matching archetypes (including empty ones)
 ```
 
 ## QueryBuilder
@@ -78,11 +78,11 @@ const moveSys = world.register_system(
 );
 ```
 
-The query is captured in the closure and reused every frame. For systems that don't need a query, use the config object overload:
+The query is captured in the closure and reused every frame. For systems that don't need a query, pass a bare function:
 
 ```ts
-const logSys = world.register_system({
-  fn(ctx, dt) { console.log("frame", dt); },
+const logSys = world.register_system((ctx, dt) => {
+  console.log("frame", dt);
 });
 ```
 

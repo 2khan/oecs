@@ -43,7 +43,7 @@ describe("entity creation (recycled)", () => {
             ids.push(world.create_entity());
           }
           for (let i = 0; i < N; i++) {
-            world.destroy_entity(ids[i]);
+            world.destroy_entity_deferred(ids[i]);
           }
           world.flush();
         },
@@ -64,7 +64,7 @@ describe("entity destruction (bare)", () => {
       `destroy ${N.toLocaleString()} bare entities`,
       () => {
         for (let i = 0; i < N; i++) {
-          world.destroy_entity(ids[i]);
+          world.destroy_entity_deferred(ids[i]);
         }
         world.flush();
       },
@@ -94,7 +94,7 @@ describe("entity destruction (with components)", () => {
       `destroy ${N.toLocaleString()} entities with Pos+Vel`,
       () => {
         for (let i = 0; i < N; i++) {
-          world.destroy_entity(ids[i]);
+          world.destroy_entity_deferred(ids[i]);
         }
         world.flush();
       },

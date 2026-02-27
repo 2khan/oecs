@@ -43,7 +43,7 @@ world.add_systems(SCHEDULE.UPDATE, {
 });
 ```
 
-Systems with ordering constraints are topologically sorted using Kahn's algorithm. Systems with no constraints run in registration order. Circular dependencies throw in dev mode.
+Systems with ordering constraints are topologically sorted using Kahn's algorithm. Systems with no constraints run in registration order. Circular dependencies always throw (not tree-shaken in production).
 
 ## Fixed Timestep
 

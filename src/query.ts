@@ -31,7 +31,7 @@
  *
  *   q.and(Health)          — extend required components
  *   q.not(Dead)            — exclude archetypes with Dead
- *   q.or(Poison, Fire)     — require at least one of these
+ *   q.any_of(Poison, Fire) — require at least one of these
  *
  ***/
 
@@ -41,6 +41,7 @@ import type { EntityID } from "./entity";
 import type {
   ComponentDef,
   ComponentID,
+  ComponentSchema,
   ComponentFields,
   FieldValues,
 } from "./component";
@@ -62,17 +63,17 @@ export interface QueryResolver {
     include: BitSet,
     exclude: BitSet | null,
     any_of: BitSet | null,
-    defs: readonly ComponentDef<ComponentFields>[],
+    defs: readonly ComponentDef[],
   ): Query<any>; // any: heterogeneous cache — callers downcast to their specific Query<Defs>
 }
 
-export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
+export class Query<Defs extends readonly ComponentDef[]> {
   private readonly _archetypes: Archetype[];
   private readonly _defs: Defs;
-  public readonly _resolver: QueryResolver;
-  public readonly _include: BitSet;
-  public readonly _exclude: BitSet | null;
-  public readonly _any_of: BitSet | null;
+  private readonly _resolver: QueryResolver;
+  private readonly _include: BitSet;
+  private readonly _exclude: BitSet | null;
+  private readonly _any_of: BitSet | null;
 
   constructor(
     archetypes: Archetype[],
@@ -91,7 +92,7 @@ export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
   }
 
   /** Number of matching archetypes (including empty ones). */
-  public get length(): number {
+  public get archetype_count(): number {
     return this._archetypes.length;
   }
 
@@ -114,11 +115,11 @@ export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
   }
 
   /** Extend required component set. Returns a new (cached) Query. */
-  public and<D extends ComponentDef<ComponentFields>[]>(
+  public and<D extends ComponentDef[]>(
     ...comps: D
   ): Query<[...Defs, ...D]> {
     const new_include = this._include.copy();
-    const new_defs = this._defs.slice() as ComponentDef<ComponentFields>[];
+    const new_defs = this._defs.slice() as ComponentDef[];
     for (let i = 0; i < comps.length; i++) {
       if (!new_include.has(comps[i] as number)) {
         new_include.set(comps[i] as number);
@@ -134,7 +135,7 @@ export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
   }
 
   /** Exclude archetypes that have any of these components. */
-  public not(...comps: ComponentDef<ComponentFields>[]): Query<Defs> {
+  public not(...comps: ComponentDef[]): Query<Defs> {
     const new_exclude = this._exclude ? this._exclude.copy() : new BitSet();
     for (let i = 0; i < comps.length; i++) new_exclude.set(comps[i] as number);
     return this._resolver._resolve_query(
@@ -146,7 +147,7 @@ export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
   }
 
   /** Require at least one of these components. */
-  public or(...comps: ComponentDef<ComponentFields>[]): Query<Defs> {
+  public any_of(...comps: ComponentDef[]): Query<Defs> {
     const new_any_of = this._any_of ? this._any_of.copy() : new BitSet();
     for (let i = 0; i < comps.length; i++) new_any_of.set(comps[i] as number);
     return this._resolver._resolve_query(
@@ -161,7 +162,7 @@ export class Query<Defs extends readonly ComponentDef<ComponentFields>[]> {
 export class QueryBuilder {
   constructor(private readonly _resolver: QueryResolver) {}
 
-  public every<T extends ComponentDef<ComponentFields>[]>(
+  public every<T extends ComponentDef[]>(
     ...defs: T
   ): Query<T> {
     const mask = new BitSet();
@@ -181,20 +182,20 @@ export class SystemContext {
     return this.store.create_entity();
   }
 
-  public get_field<F extends ComponentFields>(
-    def: ComponentDef<F>,
+  public get_field<S extends ComponentSchema>(
     entity_id: EntityID,
-    field: F[number],
+    def: ComponentDef<S>,
+    field: string & keyof S,
   ): number {
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     return arch.read_field(row, def as ComponentID, field);
   }
 
-  public set_field<F extends ComponentFields>(
-    def: ComponentDef<F>,
+  public set_field<S extends ComponentSchema>(
     entity_id: EntityID,
-    field: F[number],
+    def: ComponentDef<S>,
+    field: string & keyof S,
     value: number,
   ): void {
     const arch = this.store.get_entity_archetype(entity_id);
@@ -204,13 +205,13 @@ export class SystemContext {
   }
 
   /** Create a cached component reference for a single entity. See ref.ts. */
-  public ref<F extends ComponentFields>(
-    def: ComponentDef<F>,
+  public ref<S extends ComponentSchema>(
+    def: ComponentDef<S>,
     entity_id: EntityID,
-  ): ComponentRef<F> {
+  ): ComponentRef<S> {
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
-    return create_ref<F>(arch.column_groups[def as unknown as number]!, row);
+    return create_ref<S>(arch.column_groups[def as unknown as number]!, row);
   }
 
   /** Buffer an entity for deferred destruction (applied at phase flush). */
@@ -219,22 +220,18 @@ export class SystemContext {
     return this;
   }
 
-  public flush_destroyed(): void {
-    this.store.flush_destroyed();
-  }
-
   public add_component(
     entity_id: EntityID,
-    def: ComponentDef<readonly []>,
+    def: ComponentDef<Record<string, never>>,
   ): this;
-  public add_component<F extends ComponentFields>(
+  public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
-    def: ComponentDef<F>,
-    values: FieldValues<F>,
+    def: ComponentDef<S>,
+    values: FieldValues<S>,
   ): this;
   public add_component(
     entity_id: EntityID,
-    def: ComponentDef<ComponentFields>,
+    def: ComponentDef,
     values?: Record<string, number>,
   ): this {
     this.store.add_component_deferred(entity_id, def, values ?? EMPTY_VALUES);
@@ -243,7 +240,7 @@ export class SystemContext {
 
   public remove_component(
     entity_id: EntityID,
-    def: ComponentDef<ComponentFields>,
+    def: ComponentDef,
   ): this {
     this.store.remove_component_deferred(entity_id, def);
     return this;
@@ -262,7 +259,7 @@ export class SystemContext {
   public emit(def: EventDef<readonly []>): void;
   public emit<F extends ComponentFields>(
     def: EventDef<F>,
-    values: FieldValues<F>,
+    values: { readonly [K in F[number]]: number },
   ): void;
   public emit(
     def: EventDef<ComponentFields>,
@@ -291,27 +288,11 @@ export class SystemContext {
 
   public set_resource<F extends ComponentFields>(
     def: ResourceDef<F>,
-    values: FieldValues<F>,
+    values: { readonly [K in F[number]]: number },
   ): void {
     this.store
       .get_resource_channel(def)
       .write(values as Record<string, number>);
   }
 
-  public get_resource_field<F extends ComponentFields>(
-    def: ResourceDef<F>,
-    field: F[number],
-  ): number {
-    const channel = this.store.get_resource_channel(def);
-    return channel.read_field(channel.field_index[field]);
-  }
-
-  public set_resource_field<F extends ComponentFields>(
-    def: ResourceDef<F>,
-    field: F[number],
-    value: number,
-  ): void {
-    const channel = this.store.get_resource_channel(def);
-    channel.write_field(channel.field_index[field], value);
-  }
 }

@@ -51,15 +51,6 @@ ctx.set_resource(Time, { delta: dt, elapsed: total });
 
 Resource writes are immediate (not deferred). Changes are visible to all subsequent reads in the same frame.
 
-## Per-Field Access
-
-For reading/writing individual fields without constructing a values object:
-
-```ts
-const delta = ctx.get_resource_field(Time, "delta");
-ctx.set_resource_field(Time, "elapsed", total);
-```
-
 ## Use Cases
 
 - **Time** -- delta time, elapsed time, frame count

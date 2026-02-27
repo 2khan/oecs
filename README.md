@@ -2,8 +2,8 @@
 
 A fast, minimal archetype-based Entity Component System written in TypeScript.
 
-- **Structure-of-Arrays (SoA)** — each component field is a contiguous `number[]` column, enabling tight inner loops.
-- **Phantom-typed components** — `ComponentDef<["x", "y"]>` is just a number at runtime, but enforces field names at compile time.
+- **Structure-of-Arrays (SoA)** — each component field is a contiguous typed array column (`Float64Array`, `Int32Array`, etc.), enabling cache-friendly inner loops.
+- **Phantom-typed components** — `ComponentDef<{x:"f64",y:"f64"}>` is just a number at runtime, but enforces field names and types at compile time.
 - **Batch iteration** — `for..of` over a query yields non-empty archetypes. Access SoA columns via `get_column()` and write the inner loop.
 - **Single-entity refs** — `ctx.ref(Pos, entity)` gives you a cached accessor with prototype-backed getters/setters.
 - **Resources** — typed global singletons (time, input, config) with live readers.
@@ -15,12 +15,14 @@ A fast, minimal archetype-based Entity Component System written in TypeScript.
 ## Quick start
 
 ```ts
-import { ECS, SCHEDULE } from "@oasys/oecs";
+import { ECS, SCHEDULE } from "@oasys/oecs-typed2";
 
 const world = new ECS();
 
-// Define components as field-name arrays
-const Pos = world.register_component(["x", "y"] as const);
+// Record syntax — per-field type control
+const Pos = world.register_component({ x: "f64", y: "f64" });
+
+// Array shorthand — uniform type, defaults to "f64"
 const Vel = world.register_component(["vx", "vy"] as const);
 
 // Tags have no fields
@@ -74,13 +76,21 @@ function frame(dt: number) {
 
 ## Components
 
-Components are defined as readonly string arrays of field names. All field values are `number`.
+Components map field names to typed array tags. All field values are `number`, but storage uses the specified typed array (`Float64Array`, `Int32Array`, etc.) for cache-friendly iteration.
 
 ```ts
-const Position = world.register_component(["x", "y"] as const);
-const Health   = world.register_component(["current", "max"] as const);
-const IsEnemy  = world.register_tag(); // no fields
+// Record syntax — per-field type control
+const Position = world.register_component({ x: "f64", y: "f64" });
+const Health   = world.register_component({ current: "i32", max: "i32" });
+
+// Array shorthand — all fields default to "f64"
+const Vel      = world.register_component(["vx", "vy"] as const);
+
+// Tags — no fields
+const IsEnemy  = world.register_tag();
 ```
+
+Supported typed array tags: `"f32"`, `"f64"`, `"i8"`, `"i16"`, `"i32"`, `"u8"`, `"u16"`, `"u32"`.
 
 Add components individually or in batch (single archetype transition):
 
@@ -236,7 +246,7 @@ See [docs/api/schedule.md](docs/api/schedule.md) for full API.
 ```ts
 const e = world.create_entity();
 world.is_alive(e); // true
-world.destroy_entity(e); // deferred
+world.destroy_entity_deferred(e); // deferred
 world.flush();
 world.is_alive(e); // false
 ```
@@ -245,7 +255,7 @@ Entity IDs are generational: destroying an entity increments its slot's generati
 
 ## Dev / Prod modes
 
-`__DEV__` compile-time flags enable bounds checking, dead entity detection, duplicate system detection, and circular dependency detection. All dev checks are tree-shaken in production builds.
+`__DEV__` compile-time flags enable bounds checking, dead entity detection, and duplicate system detection. Circular dependency detection is always active (not tree-shaken). All other dev checks are tree-shaken in production builds.
 
 ## Development
 

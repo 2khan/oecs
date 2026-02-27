@@ -111,6 +111,33 @@ export class GrowableTypedArray<T extends AnyTypedArray> {
     };
   }
 
+  /** Ensure the backing buffer can hold at least `capacity` elements without growing. */
+  public ensure_capacity(capacity: number): void {
+    if (capacity <= this._buf.length) return;
+    let new_cap = this._buf.length || 1;
+    while (new_cap < capacity) new_cap *= GROWTH_FACTOR;
+    const next = new this._ctor(new_cap);
+    next.set(this._buf.subarray(0, this._len));
+    this._buf = next;
+  }
+
+  /**
+   * Append `count` elements from `src` starting at `src_offset`.
+   * Grows if needed. Equivalent to push() in a loop but uses TypedArray.set().
+   */
+  public bulk_append(src: T, src_offset: number, count: number): void {
+    this.ensure_capacity(this._len + count);
+    this._buf.set(src.subarray(src_offset, src_offset + count) as any, this._len);
+    this._len += count;
+  }
+
+  /** Append `count` zeroes. Grows if needed. */
+  public bulk_append_zeroes(count: number): void {
+    this.ensure_capacity(this._len + count);
+    this._buf.fill(0, this._len, this._len + count);
+    this._len += count;
+  }
+
   private _grow(): void {
     const next = new this._ctor(this._buf.length * GROWTH_FACTOR);
     next.set(this._buf);

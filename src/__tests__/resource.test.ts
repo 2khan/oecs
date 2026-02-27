@@ -84,7 +84,7 @@ describe("Resource system", () => {
     expect(read_elapsed).toBe(1.0);
   });
 
-  it("get_resource_field reads a single field", () => {
+  it("ctx.resource() reads individual fields via the reader", () => {
     const world = new ECS();
     const Camera = world.register_resource(["x", "y", "zoom"] as const, {
       x: 10,
@@ -95,7 +95,7 @@ describe("Resource system", () => {
 
     const sys = world.register_system({
       fn(ctx: SystemContext) {
-        read_zoom = ctx.get_resource_field(Camera, "zoom");
+        read_zoom = ctx.resource(Camera).zoom;
       },
     });
 
@@ -106,7 +106,7 @@ describe("Resource system", () => {
     expect(read_zoom).toBe(2);
   });
 
-  it("set_resource_field writes a single field", () => {
+  it("ctx.set_resource() updates individual fields", () => {
     const world = new ECS();
     const Camera = world.register_resource(["x", "y", "zoom"] as const, {
       x: 10,
@@ -119,7 +119,7 @@ describe("Resource system", () => {
 
     const writer = world.register_system({
       fn(ctx: SystemContext) {
-        ctx.set_resource_field(Camera, "zoom", 4);
+        ctx.set_resource(Camera, { x: 10, y: 20, zoom: 4 });
       },
     });
     const reader = world.register_system({
@@ -200,7 +200,7 @@ describe("Resource system", () => {
     // Write only x — y and z should stay the same.
     // set_resource takes FieldValues<F> which requires all fields,
     // but internally ResourceChannel.write only overwrites fields present in the record.
-    // So we use the channel directly via set_resource_field for partial updates.
+    // So we use the channel directly for partial updates.
     const world_ecs = unsafe_cast<{ store: Store }>(world);
     const channel = world_ecs.store.get_resource_channel(Vec);
     channel.write({ x: 10 });

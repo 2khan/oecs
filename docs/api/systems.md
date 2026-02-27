@@ -2,7 +2,15 @@
 
 ## Registration
 
-Two registration styles:
+Three registration styles:
+
+### Bare function (no query, no lifecycle hooks)
+
+```ts
+const logSys = world.register_system((ctx, dt) => {
+  console.log("frame", dt);
+});
+```
 
 ### With a typed query
 
@@ -27,17 +35,16 @@ const moveSys = world.register_system(
 
 The query is resolved once at registration time and captured in the closure. Each frame, the schedule calls your function with the pre-resolved query.
 
-### Without a query
+### Full config (for lifecycle hooks)
 
 ```ts
-const logSys = world.register_system({
-  fn(ctx, dt) {
-    console.log("frame", dt);
-  },
+const sys = world.register_system({
+  fn(ctx, dt) { /* runs every frame */ },
+  on_added(ctx) { /* once at startup */ },
 });
 ```
 
-Both styles return a `SystemDescriptor` used for scheduling and ordering.
+All styles return a `SystemDescriptor` used for scheduling and ordering.
 
 ## SystemContext
 
@@ -64,8 +71,8 @@ All structural changes are buffered and applied after the current phase complete
 
 ```ts
 // Direct field access (lookups archetype + row each call)
-const hp = ctx.get_field(Health, entity, "current");
-ctx.set_field(Health, entity, "current", hp - 10);
+const hp = ctx.get_field(entity, Health, "current");
+ctx.set_field(entity, Health, "current", hp - 10);
 
 // Cached ref (lookups once, then getter/setter access)
 const pos = ctx.ref(Pos, entity);
@@ -92,10 +99,6 @@ const time = ctx.resource(Time);
 time.delta; // number
 
 ctx.set_resource(Time, { delta: dt, elapsed: total });
-
-// Per-field access
-const delta = ctx.get_resource_field(Time, "delta");
-ctx.set_resource_field(Time, "elapsed", total);
 ```
 
 ### Flush

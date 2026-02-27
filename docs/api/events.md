@@ -51,15 +51,15 @@ Signals are much faster than data events (~14x) since they only increment a coun
 
 ## Lifecycle
 
-Events are auto-cleared at the start of each `world.update()` call. Events emitted during a frame are only visible until the next `update()`.
+Events are auto-cleared at the end of each `world.update()` call, after all phases have run. Events emitted during a frame are visible to all subsequent systems in the same frame, then discarded.
 
 ```
 world.update(dt)
-  → clear all events         ← events from previous frame gone
   → run FIXED_UPDATE phases
   → run PRE_UPDATE phase     ← systems can emit events
   → run UPDATE phase         ← systems can read events emitted earlier this frame
-  → run POST_UPDATE phase
+  → run POST_UPDATE phase    ← last chance to read events
+  → clear all events         ← events gone before next frame
 ```
 
 ## Phantom Typing

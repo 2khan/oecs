@@ -8,7 +8,7 @@
  *
  * Architecture: Facade pattern over an archetype-based ECS.
  * - Entities are generational IDs (no object allocation)
- * - Components are plain number[] columns grouped by archetype
+ * - Components are typed array columns grouped by archetype
  * - Queries are cached and live-updated as new archetypes appear
  * - Systems are plain functions scheduled across 6 lifecycle phases
  *
@@ -16,8 +16,13 @@
  *
  *   const world = new World({ fixed_timestep: 1/50 });
  *
- *   const Pos = world.register_component(["x", "y"] as const);
+ *   // Record syntax (per-field type control)
+ *   const Pos = world.register_component({ x: "f64", y: "f64" });
+ *   const Health = world.register_component({ current: "i32", max: "i32" });
+ *
+ *   // Array shorthand (uniform type, defaults to "f64")
  *   const Vel = world.register_component(["vx", "vy"] as const);
+ *
  *   const IsEnemy = world.register_tag();
  *
  *   const e = world.create_entity();
@@ -51,6 +56,7 @@
 
 import { Store } from "./store";
 import { Schedule, type SCHEDULE } from "./schedule";
+import type { Archetype } from "./archetype";
 import {
   SystemContext,
   Query,
@@ -62,6 +68,7 @@ import type { EntityID } from "./entity";
 import type {
   ComponentDef,
   ComponentID,
+  ComponentSchema,
   ComponentFields,
   FieldValues,
 } from "./component";
@@ -69,11 +76,12 @@ import type { EventDef } from "./event";
 import type { ResourceDef, ResourceReader } from "./resource";
 import {
   as_system_id,
+  type SystemFn,
   type SystemConfig,
   type SystemDescriptor,
 } from "./system";
 import type { SystemEntry } from "./schedule";
-import { BitSet } from "type_primitives";
+import { BitSet, type TypedArrayTag } from "type_primitives";
 import { bucket_push } from "./utils/arrays";
 import {
   EMPTY_VALUES,
@@ -86,6 +94,7 @@ import {
 export interface WorldOptions {
   fixed_timestep?: number;
   max_fixed_steps?: number;
+  initial_capacity?: number;
 }
 
 export class ECS implements QueryResolver {
@@ -108,7 +117,7 @@ export class ECS implements QueryResolver {
   private readonly scratch_mask: BitSet = new BitSet();
 
   constructor(options?: WorldOptions) {
-    this.store = new Store();
+    this.store = new Store(options?.initial_capacity);
     this.schedule = new Schedule();
     this.ctx = new SystemContext(this.store);
     this._fixed_timestep = options?.fixed_timestep ?? DEFAULT_FIXED_TIMESTEP;
@@ -127,14 +136,28 @@ export class ECS implements QueryResolver {
     return this._accumulator / this._fixed_timestep;
   }
 
-  public register_component<F extends readonly string[]>(
-    fields: F,
-  ): ComponentDef<F> {
-    return this.store.register_component(fields);
+  // Overload 1: record syntax (per-field types)
+  public register_component<S extends Record<string, TypedArrayTag>>(schema: S): ComponentDef<S>;
+  // Overload 2: array shorthand (uniform type, defaults to "f64")
+  public register_component<const F extends readonly string[], T extends TypedArrayTag = "f64">(
+    fields: F, type?: T,
+  ): ComponentDef<{ readonly [K in F[number]]: T }>;
+  // Implementation
+  public register_component(
+    schema_or_fields: Record<string, TypedArrayTag> | readonly string[],
+    type?: TypedArrayTag,
+  ): ComponentDef<any> {
+    if (Array.isArray(schema_or_fields)) {
+      const t = type ?? "f64";
+      const schema: Record<string, TypedArrayTag> = Object.create(null);
+      for (const f of schema_or_fields) schema[f] = t;
+      return this.store.register_component(schema);
+    }
+    return this.store.register_component(schema_or_fields as Record<string, TypedArrayTag>);
   }
 
-  public register_tag(): ComponentDef<readonly []> {
-    return this.store.register_component([] as const);
+  public register_tag(): ComponentDef<Record<string, never>> {
+    return this.store.register_component({} as Record<string, never>);
   }
 
   public register_event<F extends readonly string[]>(fields: F): EventDef<F> {
@@ -147,7 +170,7 @@ export class ECS implements QueryResolver {
 
   public register_resource<F extends readonly string[]>(
     fields: F,
-    initial: FieldValues<F>,
+    initial: { readonly [K in F[number]]: number },
   ): ResourceDef<F> {
     return this.store.register_resource(
       fields,
@@ -163,7 +186,7 @@ export class ECS implements QueryResolver {
 
   public set_resource<F extends ComponentFields>(
     def: ResourceDef<F>,
-    values: FieldValues<F>,
+    values: { readonly [K in F[number]]: number },
   ): void {
     this.store
       .get_resource_channel(def)
@@ -174,7 +197,7 @@ export class ECS implements QueryResolver {
     return this.store.create_entity();
   }
 
-  public destroy_entity(id: EntityID): void {
+  public destroy_entity_deferred(id: EntityID): void {
     this.store.destroy_entity_deferred(id);
   }
 
@@ -188,25 +211,26 @@ export class ECS implements QueryResolver {
 
   public add_component(
     entity_id: EntityID,
-    def: ComponentDef<readonly []>,
-  ): void;
-  public add_component<F extends ComponentFields>(
+    def: ComponentDef<Record<string, never>>,
+  ): this;
+  public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
-    def: ComponentDef<F>,
-    values: FieldValues<F>,
-  ): void;
+    def: ComponentDef<S>,
+    values: FieldValues<S>,
+  ): this;
   public add_component(
     entity_id: EntityID,
-    def: ComponentDef<ComponentFields>,
+    def: ComponentDef,
     values?: Record<string, number>,
-  ): void {
+  ): this {
     this.store.add_component(entity_id, def, values ?? EMPTY_VALUES);
+    return this;
   }
 
   public add_components(
     entity_id: EntityID,
     entries: {
-      def: ComponentDef<ComponentFields>;
+      def: ComponentDef;
       values?: Record<string, number>;
     }[],
   ): void {
@@ -215,7 +239,7 @@ export class ECS implements QueryResolver {
 
   public remove_component(
     entity_id: EntityID,
-    def: ComponentDef<ComponentFields>,
+    def: ComponentDef,
   ): this {
     this.store.remove_component(entity_id, def);
     return this;
@@ -223,32 +247,76 @@ export class ECS implements QueryResolver {
 
   public remove_components(
     entity_id: EntityID,
-    ...defs: ComponentDef<ComponentFields>[]
+    ...defs: ComponentDef[]
   ): void {
     this.store.remove_components(entity_id, defs);
   }
 
   public has_component(
     entity_id: EntityID,
-    def: ComponentDef<ComponentFields>,
+    def: ComponentDef,
   ): boolean {
     return this.store.has_component(entity_id, def);
   }
 
-  public get_field<F extends ComponentFields>(
-    def: ComponentDef<F>,
+  /**
+   * Bulk add a component to ALL entities in the given archetype.
+   * O(columns) via TypedArray.set() instead of O(N×columns).
+   */
+  public batch_add_component(
+    src_arch: Archetype,
+    def: ComponentDef<Record<string, never>>,
+  ): void;
+  public batch_add_component<S extends ComponentSchema>(
+    src_arch: Archetype,
+    def: ComponentDef<S>,
+    values: FieldValues<S>,
+  ): void;
+  public batch_add_component(
+    src_arch: Archetype,
+    def: ComponentDef,
+    values?: Record<string, number>,
+  ): void {
+    this.store.batch_add_component(src_arch, def, values);
+  }
+
+  /**
+   * Bulk remove a component from ALL entities in the given archetype.
+   * O(columns) via TypedArray.set() instead of O(N×columns).
+   */
+  public batch_remove_component(
+    src_arch: Archetype,
+    def: ComponentDef,
+  ): void {
+    this.store.batch_remove_component(src_arch, def);
+  }
+
+  public get_field<S extends ComponentSchema>(
     entity_id: EntityID,
-    field: F[number],
+    def: ComponentDef<S>,
+    field: string & keyof S,
   ): number {
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     return arch.read_field(row, def as unknown as ComponentID, field);
   }
 
+  public set_field<S extends ComponentSchema>(
+    entity_id: EntityID,
+    def: ComponentDef<S>,
+    field: string & keyof S,
+    value: number,
+  ): void {
+    const arch = this.store.get_entity_archetype(entity_id);
+    const row = this.store.get_entity_row(entity_id);
+    const col = arch.get_column(def, field);
+    col[row] = value;
+  }
+
   public emit(def: EventDef<readonly []>): void;
   public emit<F extends ComponentFields>(
     def: EventDef<F>,
-    values: FieldValues<F>,
+    values: { readonly [K in F[number]]: number },
   ): void;
   public emit(
     def: EventDef<ComponentFields>,
@@ -261,7 +329,7 @@ export class ECS implements QueryResolver {
     }
   }
 
-  public query<T extends ComponentDef<ComponentFields>[]>(
+  public query<T extends ComponentDef[]>(
     ...defs: T
   ): Query<T> {
     // Reuse scratch_mask to avoid allocating a new BitSet per query call.
@@ -279,7 +347,7 @@ export class ECS implements QueryResolver {
     include: BitSet,
     exclude: BitSet | null,
     any_of: BitSet | null,
-    defs: readonly ComponentDef<ComponentFields>[],
+    defs: readonly ComponentDef[],
   ): Query<any> {
     // Combine three hashes into one cache key using xor with golden-ratio
     // multipliers to reduce collision probability between masks
@@ -304,7 +372,7 @@ export class ECS implements QueryResolver {
     );
     const q = new Query(
       result,
-      defs as ComponentDef<ComponentFields>[],
+      defs as ComponentDef[],
       this,
       include.copy(),
       exclude?.copy() ?? null,
@@ -347,39 +415,46 @@ export class ECS implements QueryResolver {
   }
 
   /**
-   * Register a system with a typed query.
+   * Register a system.
    *
+   *   // Bare function (no query, no lifecycle hooks)
+   *   world.register_system((ctx, dt) => { ... });
+   *
+   *   // Function + query builder
    *   world.register_system(
    *     (q, ctx, dt) => { for (const arch of q) { ... } },
    *     (qb) => qb.every(Pos, Vel),
    *   );
    *
-   * Or with a raw config for systems that don't need a query:
-   *
+   *   // Full config (for lifecycle hooks)
    *   world.register_system({ fn(ctx, dt) { ... } });
    */
-  public register_system<Defs extends readonly ComponentDef<ComponentFields>[]>(
+  public register_system(fn: SystemFn): SystemDescriptor;
+  public register_system<Defs extends readonly ComponentDef[]>(
     fn: (q: Query<Defs>, ctx: SystemContext, dt: number) => void,
     query_fn: (qb: QueryBuilder) => Query<Defs>,
   ): SystemDescriptor;
   public register_system(config: SystemConfig): SystemDescriptor;
-  // any: overload implementation must unify Query<Defs> (first overload) with SystemConfig (second)
+  // any: overload implementation must unify bare fn, (fn, query_fn), and SystemConfig
   public register_system(
     fn_or_config:
       | ((q: Query<any>, ctx: SystemContext, dt: number) => void)
+      | SystemFn
       | SystemConfig,
     query_fn?: (qb: QueryBuilder) => Query<any>,
   ): SystemDescriptor {
     let config: SystemConfig;
 
     if (typeof fn_or_config === "function") {
-      // Resolve the query once at registration time, then close over it.
-      // The system's fn(ctx, dt) wrapper captures the resolved query and
-      // ctx so the schedule only needs to call fn(ctx, dt) each frame.
-      // ! safe: this branch only runs for the (fn, query_fn) overload
-      const q = query_fn!(new QueryBuilder(this));
-      const ctx = this.ctx;
-      config = { fn: (_ctx, dt) => fn_or_config(q, ctx, dt) };
+      if (query_fn !== undefined) {
+        // (fn, query_fn) overload — resolve query at registration time
+        const q = query_fn(new QueryBuilder(this));
+        const ctx = this.ctx;
+        config = { fn: (_ctx, dt) => fn_or_config(q, ctx, dt) };
+      } else {
+        // Bare function overload
+        config = { fn: fn_or_config as SystemFn };
+      }
     } else {
       config = fn_or_config as SystemConfig;
     }
@@ -412,7 +487,7 @@ export class ECS implements QueryResolver {
 
   public startup(): void {
     for (const descriptor of this.systems.values()) {
-      descriptor.on_added?.(this.store);
+      descriptor.on_added?.(this.ctx);
     }
     this.schedule.run_startup(this.ctx);
   }

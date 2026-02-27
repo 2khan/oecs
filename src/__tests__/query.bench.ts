@@ -36,7 +36,7 @@ function make_fragmented_world(N: number) {
   const Vel = world.register_component(Velocity);
 
   const TAG_COUNT = 100;
-  const tags: ComponentDef<readonly []>[] = [];
+  const tags: ComponentDef<Record<string, never>>[] = [];
   for (let t = 0; t < TAG_COUNT; t++) {
     tags.push(world.register_tag());
   }
@@ -154,10 +154,10 @@ describe("single-entity access: get_field/set_field vs ref()", () => {
     bench(`get_field/set_field — ${N.toLocaleString()} entities`, () => {
       for (let i = 0; i < entities.length; i++) {
         const e = entities[i];
-        const vx = ctx.get_field(Vel, e, "vx");
-        const vy = ctx.get_field(Vel, e, "vy");
-        ctx.set_field(Pos, e, "x", ctx.get_field(Pos, e, "x") + vx);
-        ctx.set_field(Pos, e, "y", ctx.get_field(Pos, e, "y") + vy);
+        const vx = ctx.get_field(e, Vel, "vx");
+        const vy = ctx.get_field(e, Vel, "vy");
+        ctx.set_field(e, Pos, "x", ctx.get_field(e, Pos, "x") + vx);
+        ctx.set_field(e, Pos, "y", ctx.get_field(e, Pos, "y") + vy);
       }
     });
 

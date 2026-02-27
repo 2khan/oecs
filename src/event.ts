@@ -30,7 +30,7 @@ import {
   validate_and_cast,
   is_non_negative_integer,
 } from "type_primitives";
-import type { ComponentFields, ColumnsForSchema } from "./component";
+import type { ComponentFields, ColumnsForFields } from "./component";
 
 export type EventID = Brand<number, "event_id">;
 export const as_event_id = (value: number) =>
@@ -50,7 +50,7 @@ export type EventDef<F extends ComponentFields = ComponentFields> = EventID & {
 /** Reader view over an event channel's SoA columns. */
 export type EventReader<F extends ComponentFields> = {
   length: number;
-} & ColumnsForSchema<F>;
+} & ColumnsForFields<F>;
 
 export class EventChannel {
   public readonly field_names: string[];

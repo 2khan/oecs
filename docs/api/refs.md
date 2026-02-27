@@ -30,14 +30,14 @@ Prototypes are cached per column group via a `WeakMap`. Creating a ref is just:
 
 1. Look up (or build) the prototype for this column group
 2. `Object.create(proto)` -- inherits getters/setters
-3. Set `_columns` and `_row` on the instance
+3. Set `_columns` (raw typed array buffers) and `_row` on the instance
 
 No closure allocation, no `defineProperty` loop per call. The prototype is built once and reused for all refs targeting the same component in the same archetype.
 
-Each field on the prototype is a getter/setter pair:
+Each field on the prototype is a getter/setter pair that reads/writes directly into the typed array buffer:
 
 ```ts
-get x() { return this._columns[col_idx][this._row]; }
+get x() { return this._columns[col_idx][this._row]; }  // _columns[i] is a TypedArray (Float64Array, etc.)
 set x(v) { this._columns[col_idx][this._row] = v; }
 ```
 
