@@ -167,11 +167,8 @@ Columns are organized into `ArchetypeColumnGroup` objects, one per data-bearing 
 interface ArchetypeColumnGroup {
   layout: ArchetypeColumnLayout; // field_names, field_index
   columns: number[][]; // indexed by field_index
-  record: Record<string, number[]>; // { "x": columns[0], "y": columns[1] }
 }
 ```
-
-The `record` object is what `arch.get_column_group()` returns — a pre-built `{ fieldName: column }` mapping.
 
 Column groups are stored in a **sparse array** indexed by `ComponentID`:
 
@@ -348,16 +345,19 @@ Queries implement `Symbol.iterator`, yielding non-empty archetypes:
 
 ```ts
 for (const arch of query) {
-  const pos = arch.get_column_group(Pos); // { x: number[], y: number[] }
-  const vel = arch.get_column_group(Vel);
-  for (let i = 0; i < arch.entity_count; i++) {
-    pos.x[i] += vel.vx[i];
-    pos.y[i] += vel.vy[i];
+  const px = arch.get_column(Pos, "x");
+  const py = arch.get_column(Pos, "y");
+  const vx = arch.get_column(Vel, "vx");
+  const vy = arch.get_column(Vel, "vy");
+  const n = arch.entity_count;
+  for (let i = 0; i < n; i++) {
+    px[i] += vx[i];
+    py[i] += vy[i];
   }
 }
 ```
 
-The iterator skips archetypes with zero entities. Systems access column groups via `arch.get_column_group(def)` or individual columns via `arch.get_column(def, field)`, then write the inner loop over `arch.entity_count`.
+The iterator skips archetypes with zero entities. Systems access columns via `arch.get_column(def, field)`, then write the inner loop over `arch.entity_count`.
 
 ### `count()`
 

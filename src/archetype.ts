@@ -28,7 +28,6 @@ import type { ComponentID } from "./component";
 import type {
   ComponentFields,
   ComponentDef,
-  ColumnsForSchema,
 } from "./component";
 import { get_entity_index, type EntityID } from "./entity";
 import { ECS_ERROR, ECSError } from "./utils/error";
@@ -58,7 +57,6 @@ export interface ArchetypeColumnLayout {
 interface ArchetypeColumnGroup {
   layout: ArchetypeColumnLayout;
   columns: number[][];
-  record: Record<string, number[]>;
 }
 
 export class Archetype {
@@ -92,16 +90,9 @@ export class Archetype {
         for (let j = 0; j < layout.field_names.length; j++) {
           columns[j] = [];
         }
-        // Build a named record { fieldName: column } so get_column_group() returns
-        // e.g. { x: number[], y: number[] } directly for system iteration
-        const record: Record<string, number[]> = Object.create(null);
-        for (let k = 0; k < layout.field_names.length; k++) {
-          record[layout.field_names[k]] = columns[k];
-        }
         this.column_groups[layout.component_id] = {
           layout,
           columns,
-          record,
         };
         this._column_ids.push(layout.component_id);
       }
@@ -150,15 +141,6 @@ export class Archetype {
       }
     }
     return group!.columns[col_idx];
-  }
-
-  /** Get all columns for a component as { fieldName: number[] }. */
-  public get_column_group<F extends ComponentFields>(
-    def: ComponentDef<F>,
-  ): ColumnsForSchema<F> {
-    const group = this.column_groups[def];
-    if (!group) return {} as ColumnsForSchema<F>;
-    return group.record as unknown as ColumnsForSchema<F>;
   }
 
   public write_fields(

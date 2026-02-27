@@ -12,33 +12,23 @@ Queries are live -- as new archetypes are created, matching ones are automatical
 
 ## Iterating with `for..of`
 
-Use `for..of` to iterate non-empty matching archetypes. Access columns via `get_column_group()` (all fields) or `get_column()` (single field), then write the inner loop over `arch.entity_count`.
-
-```ts
-for (const arch of q) {
-  const pos = arch.get_column_group(Pos); // { x: number[], y: number[] }
-  const vel = arch.get_column_group(Vel); // { vx: number[], vy: number[] }
-  for (let i = 0; i < arch.entity_count; i++) {
-    pos.x[i] += vel.vx[i];
-    pos.y[i] += vel.vy[i];
-  }
-}
-```
-
-The iterator skips empty archetypes automatically.
-
-For per-field access, use `get_column()`:
+Use `for..of` to iterate non-empty matching archetypes. Access columns via `get_column()`, then write the inner loop over `arch.entity_count`.
 
 ```ts
 for (const arch of q) {
   const px = arch.get_column(Pos, "x");
   const py = arch.get_column(Pos, "y");
-  for (let i = 0; i < arch.entity_count; i++) {
-    px[i] += 1;
-    py[i] += 1;
+  const vx = arch.get_column(Vel, "vx");
+  const vy = arch.get_column(Vel, "vy");
+  const n = arch.entity_count;
+  for (let i = 0; i < n; i++) {
+    px[i] += vx[i];
+    py[i] += vy[i];
   }
 }
 ```
+
+The iterator skips empty archetypes automatically.
 
 ## Query Chaining
 
@@ -73,11 +63,14 @@ Used inside `register_system` to resolve a query once at registration time:
 const moveSys = world.register_system(
   (q, ctx, dt) => {
     for (const arch of q) {
-      const pos = arch.get_column_group(Pos);
-      const vel = arch.get_column_group(Vel);
-      for (let i = 0; i < arch.entity_count; i++) {
-        pos.x[i] += vel.vx[i] * dt;
-        pos.y[i] += vel.vy[i] * dt;
+      const px = arch.get_column(Pos, "x");
+      const py = arch.get_column(Pos, "y");
+      const vx = arch.get_column(Vel, "vx");
+      const vy = arch.get_column(Vel, "vy");
+      const n = arch.entity_count;
+      for (let i = 0; i < n; i++) {
+        px[i] += vx[i] * dt;
+        py[i] += vy[i] * dt;
       }
     }
   },

@@ -28,11 +28,13 @@
  *   const moveSys = world.register_system(
  *     (q, _ctx, dt) => {
  *       for (const arch of q) {
- *         const pos = arch.get_column_group(Pos);
- *         const vel = arch.get_column_group(Vel);
+ *         const px = arch.get_column(Pos, "x");
+ *         const py = arch.get_column(Pos, "y");
+ *         const vx = arch.get_column(Vel, "vx");
+ *         const vy = arch.get_column(Vel, "vy");
  *         for (let i = 0; i < arch.entity_count; i++) {
- *           pos.x[i] += vel.vx[i] * dt;
- *           pos.y[i] += vel.vy[i] * dt;
+ *           px[i] += vx[i] * dt;
+ *           py[i] += vy[i] * dt;
  *         }
  *       }
  *     },

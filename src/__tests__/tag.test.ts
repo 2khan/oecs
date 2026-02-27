@@ -94,10 +94,11 @@ describe("Tag components", () => {
 
     // Verify position data survived via for..of
     for (const arch of world.query(Pos)) {
-      const pos = arch.get_column_group(Pos);
+      const px = arch.get_column(Pos, "x");
+      const py = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
-        expect(pos.x[i]).toBe(42);
-        expect(pos.y[i]).toBe(99);
+        expect(px[i]).toBe(42);
+        expect(py[i]).toBe(99);
       }
     }
   });
@@ -150,12 +151,11 @@ describe("Tag components", () => {
     const e = world.create_entity();
     world.add_component(e, Tag);
 
-    // Verify via for..of — tag column group should be empty
+    // Verify via for..of — tag archetype has no columns for the tag
     let checked = false;
     for (const arch of world.query(Tag)) {
       expect(arch.entity_count).toBe(1);
-      const tag = arch.get_column_group(Tag);
-      expect(Object.keys(tag)).toHaveLength(0);
+      expect(arch.has_columns).toBe(false);
       checked = true;
     }
     expect(checked).toBe(true);
@@ -251,10 +251,11 @@ describe("Tag components", () => {
 
     // Data columns still accessible alongside tags
     for (const arch of q_bosses) {
-      const pos = arch.get_column_group(Pos);
+      const px = arch.get_column(Pos, "x");
+      const py = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
-        expect(pos.x[i]).toBe(10);
-        expect(pos.y[i]).toBe(10);
+        expect(px[i]).toBe(10);
+        expect(py[i]).toBe(10);
       }
     }
   });

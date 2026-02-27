@@ -76,11 +76,14 @@ describe("for..of batch iteration", () => {
 
     bench(`${N.toLocaleString()} entities — single archetype`, () => {
       for (const arch of q) {
-        const pos = arch.get_column_group(Pos);
-        const vel = arch.get_column_group(Vel);
-        for (let i = 0; i < arch.entity_count; i++) {
-          pos.x[i] += vel.vx[i];
-          pos.y[i] += vel.vy[i];
+        const px = arch.get_column(Pos, "x");
+        const py = arch.get_column(Pos, "y");
+        const vx = arch.get_column(Vel, "vx");
+        const vy = arch.get_column(Vel, "vy");
+        const n = arch.entity_count;
+        for (let i = 0; i < n; i++) {
+          px[i] += vx[i];
+          py[i] += vy[i];
         }
       }
     });
@@ -122,17 +125,6 @@ describe("fragmented iteration (~100 archetypes)", () => {
     const { world, Pos, Vel } = make_fragmented_world(N);
     capture_ctx(world);
     const q = world.query(Pos, Vel);
-
-    bench(`for..of + get_column_group — ${N.toLocaleString()} entities`, () => {
-      for (const arch of q) {
-        const pos = arch.get_column_group(Pos);
-        const vel = arch.get_column_group(Vel);
-        for (let i = 0; i < arch.entity_count; i++) {
-          pos.x[i] += vel.vx[i];
-          pos.y[i] += vel.vy[i];
-        }
-      }
-    });
 
     bench(`for..of + get_column — ${N.toLocaleString()} entities`, () => {
       for (const arch of q) {

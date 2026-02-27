@@ -406,11 +406,13 @@ describe("ECS query", () => {
     world.add_component(e1, Vel, { vx: 2, vy: 3 });
 
     for (const arch of world.query(Pos, Vel)) {
-      const pos = arch.get_column_group(Pos);
-      const vel = arch.get_column_group(Vel);
+      const px = arch.get_column(Pos, "x");
+      const py = arch.get_column(Pos, "y");
+      const vx = arch.get_column(Vel, "vx");
+      const vy = arch.get_column(Vel, "vy");
       for (let i = 0; i < arch.entity_count; i++) {
-        pos.x[i] += vel.vx[i]; // 5 + 2 = 7
-        pos.y[i] += vel.vy[i]; // 7 + 3 = 10
+        px[i] += vx[i]; // 5 + 2 = 7
+        py[i] += vy[i]; // 7 + 3 = 10
       }
     }
 

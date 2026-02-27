@@ -3,8 +3,8 @@
  *
  * Query<Defs> is a live, cached view over all archetypes matching a
  * component mask. Iterate with for..of, which yields non-empty
- * archetypes. Use arch.get_column() or arch.get_column_group() to
- * access SoA columns, then write the inner loop over arch.entity_count.
+ * archetypes. Use arch.get_column() to access SoA columns, then
+ * write the inner loop over arch.entity_count.
  *
  * QueryBuilder is the entry point for creating queries inside
  * register_system(fn, qb => qb.every(Pos, Vel)).
@@ -17,11 +17,13 @@
  * Usage (inside a system):
  *
  *   for (const arch of q) {
- *     const pos = arch.get_column_group(Pos);
- *     const vel = arch.get_column_group(Vel);
+ *     const px = arch.get_column(Pos, "x");
+ *     const py = arch.get_column(Pos, "y");
+ *     const vx = arch.get_column(Vel, "vx");
+ *     const vy = arch.get_column(Vel, "vy");
  *     for (let i = 0; i < arch.entity_count; i++) {
- *       pos.x[i] += vel.vx[i] * dt;
- *       pos.y[i] += vel.vy[i] * dt;
+ *       px[i] += vx[i] * dt;
+ *       py[i] += vy[i] * dt;
  *     }
  *   }
  *

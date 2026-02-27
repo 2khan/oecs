@@ -4,7 +4,7 @@ A fast, minimal archetype-based Entity Component System written in TypeScript.
 
 - **Structure-of-Arrays (SoA)** — each component field is a contiguous `number[]` column, enabling tight inner loops.
 - **Phantom-typed components** — `ComponentDef<["x", "y"]>` is just a number at runtime, but enforces field names at compile time.
-- **Batch iteration** — `for..of` over a query yields non-empty archetypes. Access SoA columns via `get_column_group()` and write the inner loop.
+- **Batch iteration** — `for..of` over a query yields non-empty archetypes. Access SoA columns via `get_column()` and write the inner loop.
 - **Single-entity refs** — `ctx.ref(Pos, entity)` gives you a cached accessor with prototype-backed getters/setters.
 - **Resources** — typed global singletons (time, input, config) with live readers.
 - **Events & signals** — fire-and-forget SoA channels, auto-cleared each frame.
@@ -45,11 +45,14 @@ world.add_component(e, IsEnemy);
 const moveSys = world.register_system(
   (q, _ctx, dt) => {
     for (const arch of q) {
-      const pos = arch.get_column_group(Pos);
-      const vel = arch.get_column_group(Vel);
-      for (let i = 0; i < arch.entity_count; i++) {
-        pos.x[i] += vel.vx[i] * dt;
-        pos.y[i] += vel.vy[i] * dt;
+      const px = arch.get_column(Pos, "x");
+      const py = arch.get_column(Pos, "y");
+      const vx = arch.get_column(Vel, "vx");
+      const vy = arch.get_column(Vel, "vy");
+      const n = arch.entity_count;
+      for (let i = 0; i < n; i++) {
+        px[i] += vx[i] * dt;
+        py[i] += vy[i] * dt;
       }
     }
   },
@@ -100,11 +103,14 @@ const q = world.query(Position, Velocity);
 
 // Iterate non-empty archetypes, access SoA columns, write the inner loop
 for (const arch of q) {
-  const pos = arch.get_column_group(Position);
-  const vel = arch.get_column_group(Velocity);
-  for (let i = 0; i < arch.entity_count; i++) {
-    pos.x[i] += vel.vx[i];
-    pos.y[i] += vel.vy[i];
+  const px = arch.get_column(Position, "x");
+  const py = arch.get_column(Position, "y");
+  const vx = arch.get_column(Velocity, "vx");
+  const vy = arch.get_column(Velocity, "vy");
+  const n = arch.entity_count;
+  for (let i = 0; i < n; i++) {
+    px[i] += vx[i];
+    py[i] += vy[i];
   }
 }
 
