@@ -401,6 +401,31 @@ const Vel = world.register_component(["vx", "vy"]);
 
 Entity IDs are generational. After an entity is destroyed, its slot may be reused with a new generation. A stale ID will be detected as dead by `world.is_alive()`, but if the generation wraps around (after 2047 reuses of the same slot), a stale ID could theoretically alias a new entity. In practice, this is extremely unlikely.
 
+In dev mode (`__DEV__`), the following methods throw `ENTITY_NOT_ALIVE` when called with a dead entity ID:
+
+- `has_component`
+- `get_field` / `set_field`
+- `ref`
+- `add_component` / `remove_component`
+- `destroy_entity`
+
+These guards are tree-shaken in production builds, so they have zero runtime cost.
+
+**Query iteration is always safe** — entities yielded by `for (const arch of q)` are guaranteed alive. You do not need an `is_alive()` check inside query loops.
+
+When working with entity IDs from **events, stored references, or previous frames**, always guard with `is_alive()`:
+
+```ts
+// BAD — target may have been destroyed by another system this frame
+const hp = ctx.get_field(target, Health, "current");
+
+// GOOD — guard before access
+if (world.is_alive(target)) {
+  const hp = ctx.get_field(target, Health, "current");
+  ctx.set_field(target, Health, "current", hp - damage);
+}
+```
+
 ### Circular system dependencies
 
 Ordering constraints that form a cycle will throw at runtime (always — this check is not tree-shaken in production). Design your system ordering as a DAG.

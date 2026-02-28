@@ -50,6 +50,7 @@ import type { EventDef, EventReader } from "./event";
 import type { ResourceDef, ResourceReader } from "./resource";
 import { BitSet } from "type_primitives";
 import { EMPTY_VALUES } from "./utils/constants";
+import { ECSError, ECS_ERROR } from "./utils/error";
 
 export interface QueryCacheEntry {
   include_mask: BitSet;
@@ -187,6 +188,10 @@ export class SystemContext {
     def: ComponentDef<S>,
     field: string & keyof S,
   ): number {
+    if (__DEV__) {
+      if (!this.store.is_alive(entity_id))
+        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     return arch.read_field(row, def as ComponentID, field);
@@ -198,6 +203,10 @@ export class SystemContext {
     field: string & keyof S,
     value: number,
   ): void {
+    if (__DEV__) {
+      if (!this.store.is_alive(entity_id))
+        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     const col = arch.get_column(def, field);
@@ -209,6 +218,10 @@ export class SystemContext {
     def: ComponentDef<S>,
     entity_id: EntityID,
   ): ComponentRef<S> {
+    if (__DEV__) {
+      if (!this.store.is_alive(entity_id))
+        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     return create_ref<S>(arch.column_groups[def as unknown as number]!, row);

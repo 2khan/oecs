@@ -4,9 +4,9 @@ import {
   as_archetype_id,
   type ArchetypeColumnLayout,
   type ArchetypeEdge,
-} from "../archetype";
-import { as_component_id, type ComponentDef } from "../component";
-import { create_entity_id } from "../entity";
+} from "../../archetype";
+import { as_component_id, type ComponentDef } from "../../component";
+import { create_entity_id } from "../../entity";
 import { BitSet, unsafe_cast } from "type_primitives";
 
 // Helpers

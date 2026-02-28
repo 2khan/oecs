@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { as_component_id } from "../component";
+import { as_component_id } from "../../component";
 
 describe("ComponentID", () => {
   //=========================================================

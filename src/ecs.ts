@@ -83,6 +83,7 @@ import {
 import type { SystemEntry } from "./schedule";
 import { BitSet, type TypedArrayTag } from "type_primitives";
 import { bucket_push } from "./utils/arrays";
+import { ECSError, ECS_ERROR } from "./utils/error";
 import {
   EMPTY_VALUES,
   DEFAULT_FIXED_TIMESTEP,
@@ -296,6 +297,10 @@ export class ECS implements QueryResolver {
     def: ComponentDef<S>,
     field: string & keyof S,
   ): number {
+    if (__DEV__) {
+      if (!this.store.is_alive(entity_id))
+        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     return arch.read_field(row, def as unknown as ComponentID, field);
@@ -307,6 +312,10 @@ export class ECS implements QueryResolver {
     field: string & keyof S,
     value: number,
   ): void {
+    if (__DEV__) {
+      if (!this.store.is_alive(entity_id))
+        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
     const col = arch.get_column(def, field);

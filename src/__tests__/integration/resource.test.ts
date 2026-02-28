@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ECS } from "../ecs";
-import { SCHEDULE } from "../schedule";
-import type { SystemContext } from "../query";
-import type { Store } from "../store";
+import { ECS } from "../../ecs";
+import { SCHEDULE } from "../../schedule";
+import type { SystemContext } from "../../query";
+import type { Store } from "../../store";
 import { unsafe_cast } from "type_primitives";
 
 describe("Resource system", () => {
@@ -197,10 +197,6 @@ describe("Resource system", () => {
       z: 3,
     });
 
-    // Write only x — y and z should stay the same.
-    // set_resource takes FieldValues<F> which requires all fields,
-    // but internally ResourceChannel.write only overwrites fields present in the record.
-    // So we use the channel directly for partial updates.
     const world_ecs = unsafe_cast<{ store: Store }>(world);
     const channel = world_ecs.store.get_resource_channel(Vec);
     channel.write({ x: 10 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ECS } from "../ecs";
-import { SCHEDULE } from "../schedule";
-import type { SystemContext } from "../query";
+import { ECS } from "../../ecs";
+import { SCHEDULE } from "../../schedule";
+import type { SystemContext } from "../../query";
 
 describe("Event system", () => {
   it("emit in one system, read in a later system within the same update", () => {

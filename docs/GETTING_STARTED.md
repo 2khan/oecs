@@ -332,6 +332,9 @@ const moveSys = world.register_system(
   (qb) => qb.every(Pos, Vel),
 );
 
+// NOTE: This example is simplified — in a real game, targets from events
+// may have been destroyed by another system. Guard with world.is_alive(target)
+// before accessing fields. See Best Practices for details.
 const damageSys = world.register_system((ctx, _dt) => {
   const hits = ctx.read(Hit);
   for (let i = 0; i < hits.length; i++) {

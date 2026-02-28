@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ECS } from "../ecs";
-import { SCHEDULE } from "../schedule";
-import type { SystemContext } from "../query";
+import { ECS } from "../../ecs";
+import { SCHEDULE } from "../../schedule";
+import type { SystemContext } from "../../query";
 
 const Position = ["x", "y"] as const;
 const Velocity = ["vx", "vy"] as const;
@@ -195,19 +195,6 @@ describe("ComponentRef (ctx.ref)", () => {
   //=========================================================
   // Safety: refs are valid inside systems because structural
   // changes are deferred until flush.
-  //
-  // A ref captures _columns (the backing arrays from the
-  // current archetype) and _row (the entity's position in
-  // those arrays). An archetype transition (add/remove
-  // component) would move the entity to a new archetype,
-  // invalidating both. Deferred operations prevent this:
-  // ctx.add_component / ctx.remove_component / ctx.destroy_entity
-  // only buffer the intent — the entity stays in its current
-  // archetype until ctx.flush() runs (automatically after each
-  // schedule phase).
-  //
-  // These tests verify that refs created before a deferred
-  // operation still read/write correct data.
   //=========================================================
 
   it("ref remains valid after deferred add_component (entity has not moved yet)", () => {

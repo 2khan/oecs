@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { ECS } from "../ecs";
-import { SCHEDULE } from "../schedule";
-import type { SystemContext } from "../query";
-import type { SystemConfig } from "../system";
+import { ECS } from "../../ecs";
+import { SCHEDULE } from "../../schedule";
+import type { SystemContext } from "../../query";
+import type { SystemConfig } from "../../system";
 
 function make_config(overrides?: Partial<SystemConfig>): SystemConfig {
   return {

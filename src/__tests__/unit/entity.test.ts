@@ -6,7 +6,7 @@ import {
   get_entity_generation,
   create_entity_id,
   get_entity_index,
-} from "../entity";
+} from "../../entity";
 
 // X and Y chosen to be one bit off from power of 2s
 const [x, y] = [31, 7];

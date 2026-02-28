@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ECS } from "../ecs";
-import { SCHEDULE } from "../schedule";
+import { ECS } from "../../ecs";
+import { SCHEDULE } from "../../schedule";
 
 const Position = ["x", "y"] as const;
 const Velocity = ["vx", "vy"] as const;

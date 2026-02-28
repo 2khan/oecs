@@ -794,7 +794,7 @@ What's guarded by `__DEV__`:
 - Entity ID range validation
 - Branded type construction validation
 - Archetype bounds checking
-- Dead entity access detection
+- Dead entity access detection (`has_component`, `get_field`, `set_field`, `ref`, `add_component`, `remove_component`, `destroy_entity`)
 - Duplicate system detection
 - Resource not-registered detection
 
