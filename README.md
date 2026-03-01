@@ -74,6 +74,24 @@ function frame(dt: number) {
 }
 ```
 
+## World Options
+
+`ECS` accepts an optional configuration object:
+
+```ts
+const world = new ECS({
+  initial_capacity: 4096,  // pre-allocate archetype storage (default: 1024, grows automatically)
+  fixed_timestep: 1 / 50,  // fixed update interval in seconds (default: 1/60)
+  max_fixed_steps: 4,       // cap fixed updates per frame to prevent spiral of death (default: 5)
+});
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `initial_capacity` | `number` | `1024` | Starting size for every archetype's backing typed arrays (entity IDs and all SoA component columns). Arrays double when exceeded — set this close to your expected entity count per archetype to avoid early re-allocations. |
+| `fixed_timestep` | `number` | `1/60` | Interval (seconds) for `FIXED_UPDATE` systems. |
+| `max_fixed_steps` | `number` | `5` | Maximum `FIXED_UPDATE` iterations per frame. |
+
 ## Components
 
 Components map field names to typed array tags. All field values are `number`, but storage uses the specified typed array (`Float64Array`, `Int32Array`, etc.) for cache-friendly iteration.
