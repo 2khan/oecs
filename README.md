@@ -12,6 +12,14 @@ A fast, minimal archetype-based Entity Component System written in TypeScript.
 - **Topological system ordering** — systems within a phase are sorted by before/after constraints using Kahn's algorithm.
 - **Fixed timestep** — configurable fixed update loop with accumulator and interpolation alpha.
 
+## Installation
+
+Using npm (or equivalent):
+
+```
+npm install @oasys/oecs
+```
+
 ## Quick start
 
 ```ts
@@ -99,13 +107,13 @@ Components map field names to typed array tags. All field values are `number`, b
 ```ts
 // Record syntax — per-field type control
 const Position = world.register_component({ x: "f64", y: "f64" });
-const Health   = world.register_component({ current: "i32", max: "i32" });
+const Health = world.register_component({ current: "i32", max: "i32" });
 
 // Array shorthand — all fields default to "f64"
-const Vel      = world.register_component(["vx", "vy"] as const);
+const Vel = world.register_component(["vx", "vy"] as const);
 
 // Tags — no fields
-const IsEnemy  = world.register_tag();
+const IsEnemy = world.register_tag();
 ```
 
 Supported typed array tags: `"f32"`, `"f64"`, `"i8"`, `"i16"`, `"i32"`, `"u8"`, `"u16"`, `"u32"`.
@@ -143,7 +151,11 @@ for (const arch of q) {
 }
 
 // Chaining
-const targets = world.query(Position).and(Health).not(Shield).any_of(IsEnemy, IsBoss);
+const targets = world
+  .query(Position)
+  .and(Health)
+  .not(Shield)
+  .any_of(IsEnemy, IsBoss);
 ```
 
 See [docs/api/queries.md](docs/api/queries.md) for full API.
@@ -155,13 +167,19 @@ Systems are plain functions registered with a query and scheduled into lifecycle
 ```ts
 // With a typed query
 const moveSys = world.register_system(
-  (q, ctx, dt) => { for (const arch of q) { /* ... */ } },
+  (q, ctx, dt) => {
+    for (const arch of q) {
+      /* ... */
+    }
+  },
   (qb) => qb.every(Pos, Vel),
 );
 
 // Without a query
 const logSys = world.register_system({
-  fn(ctx, dt) { console.log("frame", dt); },
+  fn(ctx, dt) {
+    console.log("frame", dt);
+  },
 });
 ```
 
@@ -182,7 +200,8 @@ Resources are typed global singletons — time, input state, camera config.
 
 ```ts
 const Time = world.register_resource(["delta", "elapsed"] as const, {
-  delta: 0, elapsed: 0,
+  delta: 0,
+  elapsed: 0,
 });
 
 // Write
@@ -190,7 +209,7 @@ world.set_resource(Time, { delta: dt, elapsed: total });
 
 // Read — scalar values, not arrays
 const time = world.resource(Time);
-time.delta;   // number
+time.delta; // number
 time.elapsed; // number
 ```
 
@@ -214,7 +233,9 @@ for (let i = 0; i < dmg.length; i++) {
 // Signals carry no data — just a count
 const OnReset = world.register_signal();
 ctx.emit(OnReset);
-if (ctx.read(OnReset).length > 0) { /* fired */ }
+if (ctx.read(OnReset).length > 0) {
+  /* fired */
+}
 ```
 
 See [docs/api/events.md](docs/api/events.md) for full API.
@@ -236,15 +257,15 @@ See [docs/api/refs.md](docs/api/refs.md) for full API.
 
 Seven lifecycle phases, executed in order:
 
-| Phase | When | Use case |
-|---|---|---|
-| `PRE_STARTUP` | Once, before startup | Resource loading |
-| `STARTUP` | Once | Initial entity spawning |
-| `POST_STARTUP` | Once, after startup | Validation |
-| `FIXED_UPDATE` | Every tick (fixed dt) | Physics, simulation |
-| `PRE_UPDATE` | Every frame, first | Input handling |
-| `UPDATE` | Every frame | Game logic |
-| `POST_UPDATE` | Every frame, last | Rendering, cleanup |
+| Phase          | When                  | Use case                |
+| -------------- | --------------------- | ----------------------- |
+| `PRE_STARTUP`  | Once, before startup  | Resource loading        |
+| `STARTUP`      | Once                  | Initial entity spawning |
+| `POST_STARTUP` | Once, after startup   | Validation              |
+| `FIXED_UPDATE` | Every tick (fixed dt) | Physics, simulation     |
+| `PRE_UPDATE`   | Every frame, first    | Input handling          |
+| `UPDATE`       | Every frame           | Game logic              |
+| `POST_UPDATE`  | Every frame, last     | Rendering, cleanup      |
 
 ```ts
 world.add_systems(SCHEDULE.UPDATE, moveSys, physicsSys);
