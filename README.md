@@ -1,292 +1,300 @@
-# OECS
+# oecs
 
-A fast, minimal archetype-based Entity Component System written in TypeScript.
+A fast, minimal, archetype-based Entity Component System for TypeScript.
 
-- **Structure-of-Arrays (SoA)** — each component field is a contiguous typed array column (`Float64Array`, `Int32Array`, etc.), enabling cache-friendly inner loops.
-- **Phantom-typed components** — `ComponentDef<{x:"f64",y:"f64"}>` is just a number at runtime, but enforces field names and types at compile time.
-- **Batch iteration** — `for..of` over a query yields non-empty archetypes. Access SoA columns via `get_column()` and write the inner loop.
-- **Single-entity refs** — `ctx.ref(Pos, entity)` gives you a cached accessor with prototype-backed getters/setters.
-- **Resources** — typed global singletons (time, input, config) with live readers.
-- **Events & signals** — fire-and-forget SoA channels, auto-cleared each frame.
-- **Deferred structural changes** — add/remove component and destroy entity are buffered during system execution and flushed between phases.
-- **Topological system ordering** — systems within a phase are sorted by before/after constraints using Kahn's algorithm.
-- **Fixed timestep** — configurable fixed update loop with accumulator and interpolation alpha.
+## Features
+
+- **Archetype-based SoA storage.** Entities sharing a component set share contiguous typed-array columns — cache-friendly loops, no per-entity object allocation.
+- **Phantom-typed components.** `ComponentDef<{ x: "f64", y: "f64" }>` is a branded integer at runtime and a fully-typed schema at compile time. Misspelled fields are compile errors.
+- **Callback iteration.** `query.for_each(arch => ...)` yields non-empty archetypes; you write the row loop over typed-array columns.
+- **Tick-based change detection.** Each `(archetype, component)` tracks a change tick. `query.changed(Pos).for_each(...)` visits only archetypes mutated since the system's last run.
+- **Key-based events and resources.** `event_key<F>` / `resource_key<T>` create module-scope symbol handles carrying their schema as a phantom — import the key anywhere.
+- **Cached single-entity refs.** `ctx.ref` / `ctx.ref_mut` give ergonomic `pos.x += vel.vx * dt` that compiles to a direct typed-array index op.
+- **Deferred structural changes.** `ctx.add_component` / `ctx.remove_component` / `ctx.destroy_entity` buffer until the schedule flushes between phases, so iterators stay valid.
+- **Topological scheduler.** Per-phase Kahn's-algorithm sort over a binary heap, with insertion order as a deterministic tiebreaker.
+- **Fixed timestep.** Accumulator loop with configurable `fixed_timestep` and spiral-of-death protection.
+- **Reusable primitives.** `BitSet`, `SparseSet`, `SparseMap`, `GrowableTypedArray`, `BinaryHeap`, `topological_sort` all exported.
+
+## Installation
+
+```bash
+pnpm add @oasys/oecs
+```
 
 ## Quick start
 
 ```ts
-import { ECS, SCHEDULE } from "@oasys/oecs";
+import { ECS, SCHEDULE, event_key, resource_key } from "@oasys/oecs";
+
+// Keys — module scope, phantom-typed
+const Time = resource_key<{ delta: number; elapsed: number }>("Time");
+const DamageEvent = event_key<readonly ["target", "amount"]>("Damage");
 
 const world = new ECS();
 
-// Record syntax — per-field type control
+// Components
 const Pos = world.register_component({ x: "f64", y: "f64" });
-
-// Array shorthand — uniform type, defaults to "f64"
 const Vel = world.register_component(["vx", "vy"] as const);
 
-// Tags have no fields
-const IsEnemy = world.register_tag();
+// Resources & events
+world.register_resource(Time, { delta: 0, elapsed: 0 });
+world.register_event(DamageEvent, ["target", "amount"] as const);
 
-// Resources are global singletons
-const Time = world.register_resource(["delta", "elapsed"] as const, {
-  delta: 0,
-  elapsed: 0,
-});
-
-// Events are fire-and-forget messages
-const Damage = world.register_event(["target", "amount"] as const);
-
-// Create entities and attach components
+// Entities
 const e = world.create_entity();
-world.add_component(e, Pos, { x: 0, y: 0 });
-world.add_component(e, Vel, { vx: 100, vy: 50 });
-world.add_component(e, IsEnemy);
+world.add_components(e, [
+  { def: Pos, values: { x: 0, y: 0 } },
+  { def: Vel, values: { vx: 100, vy: 50 } },
+]);
 
-// Register a system with a typed query
+// System — query resolved once at registration
 const moveSys = world.register_system(
-  (q, _ctx, dt) => {
-    for (const arch of q) {
-      const px = arch.get_column(Pos, "x");
-      const py = arch.get_column(Pos, "y");
+  (q, ctx, dt) => {
+    q.for_each((arch) => {
+      const px = arch.get_column_mut(Pos, "x", ctx.world_tick);
+      const py = arch.get_column_mut(Pos, "y", ctx.world_tick);
       const vx = arch.get_column(Vel, "vx");
       const vy = arch.get_column(Vel, "vy");
-      const n = arch.entity_count;
-      for (let i = 0; i < n; i++) {
+      for (let i = 0; i < arch.entity_count; i++) {
         px[i] += vx[i] * dt;
         py[i] += vy[i] * dt;
       }
-    }
+    });
   },
   (qb) => qb.every(Pos, Vel),
 );
 
-// Schedule the system
 world.add_systems(SCHEDULE.UPDATE, moveSys);
-
-// Initialize
 world.startup();
 
-// Game loop
-function frame(dt: number) {
-  world.set_resource(Time, { delta: dt, elapsed: performance.now() / 1000 });
+let last = performance.now();
+function frame() {
+  const now = performance.now();
+  const dt = (now - last) / 1000;
+  last = now;
+  const t = world.resource(Time);
+  world.set_resource(Time, { delta: dt, elapsed: t.elapsed + dt });
   world.update(dt);
+  requestAnimationFrame(frame);
 }
+requestAnimationFrame(frame);
 ```
 
-## World Options
-
-`ECS` accepts an optional configuration object:
+## World options
 
 ```ts
 const world = new ECS({
-  initial_capacity: 4096,  // pre-allocate archetype storage (default: 1024, grows automatically)
-  fixed_timestep: 1 / 50,  // fixed update interval in seconds (default: 1/60)
-  max_fixed_steps: 4,       // cap fixed updates per frame to prevent spiral of death (default: 5)
+  initial_capacity: 4096,
+  fixed_timestep: 1 / 50,
+  max_fixed_steps: 4,
 });
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `initial_capacity` | `number` | `1024` | Starting size for every archetype's backing typed arrays (entity IDs and all SoA component columns). Arrays double when exceeded — set this close to your expected entity count per archetype to avoid early re-allocations. |
-| `fixed_timestep` | `number` | `1/60` | Interval (seconds) for `FIXED_UPDATE` systems. |
-| `max_fixed_steps` | `number` | `5` | Maximum `FIXED_UPDATE` iterations per frame. |
+| Option             | Type     | Default | Description |
+| ------------------ | -------- | ------- | ----------- |
+| `initial_capacity` | `number` | `1024`  | Starting size of each archetype's entity-ID and column buffers. Buffers double on overflow; pick close to your expected per-archetype entity count to avoid early reallocations. |
+| `fixed_timestep`   | `number` | `1/60`  | Interval (seconds) at which `SCHEDULE.FIXED_UPDATE` systems run. |
+| `max_fixed_steps`  | `number` | `5`     | Hard cap on fixed-update iterations per frame. Protects against spiral of death. |
 
 ## Components
 
-Components map field names to typed array tags. All field values are `number`, but storage uses the specified typed array (`Float64Array`, `Int32Array`, etc.) for cache-friendly iteration.
+Records give per-field type control; array shorthand defaults to `f64`. Tags have no fields.
 
 ```ts
-// Record syntax — per-field type control
-const Position = world.register_component({ x: "f64", y: "f64" });
-const Health   = world.register_component({ current: "i32", max: "i32" });
+const Pos = world.register_component({ x: "f64", y: "f64" });
+const Health = world.register_component({ current: "i32", max: "i32" });
+const Vel = world.register_component(["vx", "vy"] as const);
+const IsEnemy = world.register_tag();
 
-// Array shorthand — all fields default to "f64"
-const Vel      = world.register_component(["vx", "vy"] as const);
-
-// Tags — no fields
-const IsEnemy  = world.register_tag();
-```
-
-Supported typed array tags: `"f32"`, `"f64"`, `"i8"`, `"i16"`, `"i32"`, `"u8"`, `"u16"`, `"u32"`.
-
-Add components individually or via `add_components` (single archetype transition):
-
-```ts
-world.add_component(e, Position, { x: 10, y: 20 });
 world.add_components(e, [
-  { def: Position, values: { x: 10, y: 20 } },
-  { def: Health, values: { current: 100, max: 100 } },
+  { def: Pos, values: { x: 0, y: 0 } },
+  { def: Vel, values: { vx: 1, vy: 0 } },
+  { def: IsEnemy },
 ]);
 ```
 
-See [docs/api/components.md](docs/api/components.md) for full API.
+Supported tags: `f32`, `f64`, `i8`, `i16`, `i32`, `u8`, `u16`, `u32`.
+
+See [docs/api/components.md](docs/api/components.md).
 
 ## Queries
 
-Queries are live views over all archetypes matching a component mask.
+Live, cached views over matching archetypes. Iterate with `for_each`.
 
 ```ts
-const q = world.query(Position, Velocity);
+const q = world.query(Pos, Vel);
 
-// Iterate non-empty archetypes, access SoA columns, write the inner loop
-for (const arch of q) {
-  const px = arch.get_column(Position, "x");
-  const py = arch.get_column(Position, "y");
-  const vx = arch.get_column(Velocity, "vx");
-  const vy = arch.get_column(Velocity, "vy");
-  const n = arch.entity_count;
-  for (let i = 0; i < n; i++) {
-    px[i] += vx[i];
-    py[i] += vy[i];
-  }
-}
+q.for_each((arch) => {
+  const px = arch.get_column(Pos, "x");
+  const py = arch.get_column(Pos, "y");
+  for (let i = 0; i < arch.entity_count; i++) { /* ... */ }
+});
 
-// Chaining
-const targets = world.query(Position).and(Health).not(Shield).any_of(IsEnemy, IsBoss);
+// Chaining returns new cached queries
+const targets = world.query(Pos).and(Health).not(Shield).any_of(IsEnemy, IsBoss);
+
+// Change detection — only archetypes whose Pos column changed since last run
+q.changed(Pos).for_each((arch) => { /* ... */ });
 ```
 
-See [docs/api/queries.md](docs/api/queries.md) for full API.
+See [docs/api/queries.md](docs/api/queries.md) and [docs/api/change-detection.md](docs/api/change-detection.md).
 
 ## Systems
 
-Systems are plain functions registered with a query and scheduled into lifecycle phases.
+Systems are plain functions. Three registration shapes all return a `SystemDescriptor`.
 
 ```ts
-// With a typed query
+// Bare function
+const logSys = world.register_system((ctx, dt) => { /* ... */ });
+
+// Function + query builder (query resolved once at registration)
 const moveSys = world.register_system(
-  (q, ctx, dt) => { for (const arch of q) { /* ... */ } },
+  (q, ctx, dt) => { q.for_each((arch) => { /* ... */ }); },
   (qb) => qb.every(Pos, Vel),
 );
 
-// Without a query
-const logSys = world.register_system({
-  fn(ctx, dt) { console.log("frame", dt); },
+// Full config — lifecycle hooks, name
+const spawnSys = world.register_system({
+  name: "spawn",
+  fn(ctx, dt) { /* every frame */ },
+  on_added(ctx) { /* once during world.startup() */ },
+  dispose() { /* during world.dispose() */ },
 });
 ```
 
-Inside systems, use `ctx` for deferred structural changes and per-entity access:
+`SystemContext` exposes deferred structural ops, per-entity access, events, resources, and tick bookkeeping (`ctx.world_tick`, `ctx.last_run_tick`).
 
-```ts
-const e = ctx.create_entity();
-ctx.add_component(e, Pos, { x: 0, y: 0 });
-ctx.destroy_entity(someEntity);
-ctx.remove_component(entity, Health);
-```
-
-See [docs/api/systems.md](docs/api/systems.md) for full API.
+See [docs/api/systems.md](docs/api/systems.md).
 
 ## Resources
 
-Resources are typed global singletons — time, input state, camera config.
+Global singletons keyed by `ResourceKey<T>`. Values can be any type — objects, typed arrays, class instances.
 
 ```ts
-const Time = world.register_resource(["delta", "elapsed"] as const, {
-  delta: 0, elapsed: 0,
-});
+import { resource_key } from "@oasys/oecs";
 
-// Write
-world.set_resource(Time, { delta: dt, elapsed: total });
+const Time = resource_key<{ delta: number; elapsed: number }>("Time");
+const Assets = resource_key<Map<string, ImageBitmap>>("Assets");
 
-// Read — scalar values, not arrays
-const time = world.resource(Time);
-time.delta;   // number
-time.elapsed; // number
+world.register_resource(Time, { delta: 0, elapsed: 0 });
+world.register_resource(Assets, new Map());
+
+const t = world.resource(Time);                         // typed as { delta, elapsed }
+world.set_resource(Time, { delta: 0.016, elapsed: 0 }); // swap in a new value
 ```
 
-See [docs/api/resources.md](docs/api/resources.md) for full API.
+See [docs/api/resources.md](docs/api/resources.md).
 
-## Events & Signals
+## Events
 
-Events are fire-and-forget SoA channels, auto-cleared each frame.
+Fire-and-forget SoA channels. Data events carry typed fields; signals carry only a count. Cleared at the end of each `world.update(dt)`.
 
 ```ts
-// Data events carry fields
-const Damage = world.register_event(["target", "amount"] as const);
-ctx.emit(Damage, { target: entityId, amount: 50 });
+import { event_key, signal_key } from "@oasys/oecs";
 
-const dmg = ctx.read(Damage);
+const DamageEvent = event_key<readonly ["target", "amount"]>("Damage");
+const GameOver = signal_key("GameOver");
+
+world.register_event(DamageEvent, ["target", "amount"] as const);
+world.register_signal(GameOver);
+
+ctx.emit(DamageEvent, { target: victimId, amount: 25 });
+ctx.emit(GameOver);
+
+const dmg = ctx.read(DamageEvent);
 for (let i = 0; i < dmg.length; i++) {
-  dmg.target[i]; // number
-  dmg.amount[i]; // number
+  dmg.target[i]; dmg.amount[i]; // number columns
 }
-
-// Signals carry no data — just a count
-const OnReset = world.register_signal();
-ctx.emit(OnReset);
-if (ctx.read(OnReset).length > 0) { /* fired */ }
+if (ctx.read(GameOver).length > 0) { /* fired */ }
 ```
 
-See [docs/api/events.md](docs/api/events.md) for full API.
+See [docs/api/events.md](docs/api/events.md).
 
 ## Refs
 
-Refs provide cached single-entity field access — faster than `get_field`/`set_field` for repeated access.
+Cached single-entity handles — resolve archetype + row + column once, then read/write fields by name.
 
 ```ts
-const pos = ctx.ref(Pos, entity);
-const vel = ctx.ref(Vel, entity);
+const pos = ctx.ref_mut(Pos, entity); // writable; bumps Pos change tick
+const vel = ctx.ref(Vel, entity);     // readonly
 pos.x += vel.vx * dt;
 pos.y += vel.vy * dt;
 ```
 
-See [docs/api/refs.md](docs/api/refs.md) for full API.
+Prefer `ctx.ref` by default; reach for `ctx.ref_mut` at the point of mutation. Do not hold refs across archetype transitions or phase flushes.
+
+See [docs/api/refs.md](docs/api/refs.md).
 
 ## Schedule
 
-Seven lifecycle phases, executed in order:
+Seven phases run in a fixed order:
 
-| Phase | When | Use case |
-|---|---|---|
-| `PRE_STARTUP` | Once, before startup | Resource loading |
-| `STARTUP` | Once | Initial entity spawning |
-| `POST_STARTUP` | Once, after startup | Validation |
-| `FIXED_UPDATE` | Every tick (fixed dt) | Physics, simulation |
-| `PRE_UPDATE` | Every frame, first | Input handling |
-| `UPDATE` | Every frame | Game logic |
-| `POST_UPDATE` | Every frame, last | Rendering, cleanup |
+| Phase          | When                             | Typical use             |
+| -------------- | -------------------------------- | ----------------------- |
+| `PRE_STARTUP`  | Once, before `STARTUP`           | Resource loading        |
+| `STARTUP`      | Once                             | Initial entity spawning |
+| `POST_STARTUP` | Once, after `STARTUP`            | Validation              |
+| `FIXED_UPDATE` | Zero+ times per frame (fixed dt) | Physics, simulation     |
+| `PRE_UPDATE`   | Every frame, first               | Input, time             |
+| `UPDATE`       | Every frame                      | Game logic, AI          |
+| `POST_UPDATE`  | Every frame, last                | Rendering, cleanup      |
 
 ```ts
-world.add_systems(SCHEDULE.UPDATE, moveSys, physicsSys);
-world.add_systems(SCHEDULE.POST_UPDATE, renderSys);
-
-// Ordering constraints
-world.add_systems(SCHEDULE.UPDATE, moveSys, {
-  system: physicsSys,
-  ordering: { after: [moveSys] },
+world.add_systems(SCHEDULE.UPDATE, moveSys, damageSys, {
+  system: deathSys,
+  ordering: { after: [damageSys] },
 });
 ```
 
-See [docs/api/schedule.md](docs/api/schedule.md) for full API.
+Within a phase, systems are topologically sorted by `before` / `after` constraints. `ctx.flush()` runs automatically between phases.
+
+See [docs/api/schedule.md](docs/api/schedule.md).
 
 ## Entity lifecycle
 
 ```ts
 const e = world.create_entity();
-world.is_alive(e); // true
-world.destroy_entity_deferred(e); // deferred
+world.is_alive(e);                // true
+world.destroy_entity_deferred(e);
 world.flush();
-world.is_alive(e); // false
+world.is_alive(e);                // false
 ```
 
-Entity IDs are generational: destroying an entity increments its slot's generation, so stale IDs are detected as dead.
+`EntityID` is a packed 31-bit integer (20-bit slot index, 11-bit generation). Destroying an entity bumps its slot's generation, so stale handles are detected as dead. Inside systems, use `ctx.create_entity()` (immediate) and `ctx.destroy_entity(e)` (deferred).
 
-## Dev / Prod modes
+See [docs/api/entities.md](docs/api/entities.md).
 
-`__DEV__` compile-time flags enable bounds checking, dead entity detection, and duplicate system detection. Circular dependency detection is always active (not tree-shaken). All other dev checks are tree-shaken in production builds.
+## Dev vs Prod modes
+
+A compile-time `__DEV__` flag gates runtime sanity checks: bounds checks, liveness checks, duplicate-system detection, and registration validation. These are tree-shaken out of production bundles by the Vite build. Scheduler cycle detection is always active and throws `ECS_ERROR.CIRCULAR_SYSTEM_DEPENDENCY` on the first offending run.
 
 ## Development
 
 ```bash
 pnpm install
-pnpm test          # vitest in watch mode
-pnpm bench         # run benchmarks
-pnpm build         # vite library build
-pnpm tsc --noEmit  # type check
+pnpm test            # vitest
+pnpm bench           # vitest bench
+pnpm build           # vite library build
+pnpm tsc --noEmit    # type check
 ```
 
 ## Guides
 
-- [Getting Started](docs/GETTING_STARTED.md) — step-by-step tutorial
-- [Best Practices](docs/BEST_PRACTICES.md) — performance tips and patterns
-- [Architecture](docs/ARCHITECTURE.md) — internal design details
+- [Getting Started](docs/GETTING_STARTED.md) — step-by-step tutorial.
+- [Best Practices](docs/BEST_PRACTICES.md) — component design, query patterns, pitfalls.
+- [Architecture](docs/ARCHITECTURE.md) — data layout, flush model, cache invalidation.
+- API reference:
+  [components](docs/api/components.md) ·
+  [entities](docs/api/entities.md) ·
+  [queries](docs/api/queries.md) ·
+  [systems](docs/api/systems.md) ·
+  [schedule](docs/api/schedule.md) ·
+  [resources](docs/api/resources.md) ·
+  [events](docs/api/events.md) ·
+  [refs](docs/api/refs.md) ·
+  [change detection](docs/api/change-detection.md) ·
+  [type primitives](docs/api/type-primitives.md)
+
+## License
+
+MIT
