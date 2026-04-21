@@ -1,4 +1,4 @@
-# oecs Architecture (v0.2.0)
+# oecs Architecture (v0.3.0)
 
 This document describes how oecs is built: the data layout that entities, components, and archetypes settle into; how queries stay correct as archetypes appear; how the scheduler and update loop drive systems; and the type primitives that underpin all of it.
 

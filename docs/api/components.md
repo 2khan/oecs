@@ -201,7 +201,7 @@ type ColumnsForSchema<S extends ComponentSchema> = {
 };
 ```
 
-## `ReadonlyColumn` and `ReadonlyUint32Array` (new in v0.2.0)
+## `ReadonlyColumn` and `ReadonlyUint32Array` (new in v0.3.0)
 
 To make accidental writes to column buffers a compile-time error, archetype read accessors return structural read-only views rather than bare typed arrays:
 

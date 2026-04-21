@@ -1,4 +1,4 @@
-# Best Practices (v0.2.0)
+# Best Practices (v0.3.0)
 
 Practical guidance for building with oecs: patterns that work with the engine's grain, the trade-offs they imply, and pitfalls that bite if ignored.
 
@@ -7,7 +7,7 @@ This document does **not** repeat API reference or describe internals. For those
 - API reference: [`docs/api/`](./api/) — one file per subsystem.
 - Internals: [`ARCHITECTURE.md`](./ARCHITECTURE.md) — data layout, flush model, cache invalidation rules.
 
-Every example compiles against v0.2.0. Most are adapted directly from `src/__tests__/integration/` — that directory is the canonical reference for "does this actually work".
+Every example compiles against v0.3.0. Most are adapted directly from `src/__tests__/integration/` — that directory is the canonical reference for "does this actually work".
 
 ---
 

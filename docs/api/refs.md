@@ -4,7 +4,7 @@ A **ref** is a lightweight handle bound to one component on one entity within a 
 
 Refs exist so that code which naturally wants to talk about "a position" or "a velocity" as an object can still compile down to a single `columns[col_idx][row]` operation per field access. The archetype, the column group, and the row index are all resolved once at creation; subsequent reads and writes are direct indexed accesses on a typed array.
 
-In v0.2.0 refs split into two forms:
+In v0.3.0 refs split into two forms:
 
 - `ReadonlyComponentRef<S>` — field types are `readonly`, writes are a compile-time error.
 - `ComponentRef<S>` — field types are mutable; writing through it also bumps the archetype's change tick for that component.

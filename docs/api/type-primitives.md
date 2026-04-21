@@ -1,4 +1,4 @@
-# Type primitives — API reference (v0.2.0)
+# Type primitives — API reference (v0.3.0)
 
 `type_primitives` is the low-level data-structure and typing layer that the ECS
 is built on. It's exported publicly because most of its contents — bit sets,
@@ -232,7 +232,7 @@ a.get(19); // 19
 const removed = a.swap_remove(0);   // moves last element into slot 0
 ```
 
-## BinaryHeap\<T\> (new in v0.2.0)
+## BinaryHeap\<T\> (new in v0.3.0)
 
 Array-backed binary heap with a user-supplied comparator. Priority is defined
 by the comparator: when `compare(a, b) < 0`, `a` has higher priority and
@@ -273,7 +273,7 @@ q.push({ name: "high", priority: 1 });
 q.pop()!.name; // "high"
 ```
 
-## topological_sort (new in v0.2.0)
+## topological_sort (new in v0.3.0)
 
 Kahn's algorithm with a `BinaryHeap` as the ready queue. The tiebreaker
 comparator orders nodes that are simultaneously unblocked, so output is
