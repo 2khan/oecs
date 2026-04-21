@@ -44,7 +44,7 @@ describe("Schedule (integration)", () => {
     schedule.add_systems(SCHEDULE.STARTUP, main);
     schedule.add_systems(SCHEDULE.POST_STARTUP, post);
 
-    schedule.run_startup(ctx);
+    schedule.run_startup(ctx, 0);
 
     expect(order).toEqual(["pre", "main", "post"]);
   });
@@ -62,7 +62,7 @@ describe("Schedule (integration)", () => {
     schedule.add_systems(SCHEDULE.UPDATE, main);
     schedule.add_systems(SCHEDULE.POST_UPDATE, post);
 
-    schedule.run_update(ctx, 0.016);
+    schedule.run_update(ctx, 0.016, 0);
 
     expect(order).toEqual(["pre", "main", "post"]);
   });
@@ -79,7 +79,7 @@ describe("Schedule (integration)", () => {
     });
 
     schedule.add_systems(SCHEDULE.UPDATE, sys);
-    schedule.run_update(ctx, 0.016);
+    schedule.run_update(ctx, 0.016, 0);
 
     expect(received_dt).toBeCloseTo(0.016);
   });
@@ -97,13 +97,9 @@ describe("Schedule (integration)", () => {
     const b = make_system({ fn: () => order.push("b") });
 
     // a runs before b
-    schedule.add_systems(
-      SCHEDULE.UPDATE,
-      { system: a, ordering: { before: [b] } },
-      b,
-    );
+    schedule.add_systems(SCHEDULE.UPDATE, { system: a, ordering: { before: [b] } }, b);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b"]);
   });
 
@@ -121,7 +117,7 @@ describe("Schedule (integration)", () => {
       ordering: { after: [a] },
     });
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b"]);
   });
 
@@ -136,7 +132,7 @@ describe("Schedule (integration)", () => {
 
     schedule.add_systems(SCHEDULE.UPDATE, a, b, c);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b", "c"]);
   });
 
@@ -157,7 +153,7 @@ describe("Schedule (integration)", () => {
       a,
     );
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b", "c"]);
   });
 
@@ -176,7 +172,7 @@ describe("Schedule (integration)", () => {
       ordering: { after: [b] },
     });
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["b", "a"]);
   });
 
@@ -197,7 +193,7 @@ describe("Schedule (integration)", () => {
       { system: b, ordering: { before: [a] } },
     );
 
-    expect(() => schedule.run_update(ctx, 0)).toThrow(/Circular/);
+    expect(() => schedule.run_update(ctx, 0, 0)).toThrow(/Circular/);
   });
 
   it("throws on 3-way circular dependency", () => {
@@ -215,7 +211,7 @@ describe("Schedule (integration)", () => {
       { system: c, ordering: { before: [a] } },
     );
 
-    expect(() => schedule.run_update(ctx, 0)).toThrow(/Circular/);
+    expect(() => schedule.run_update(ctx, 0, 0)).toThrow(/Circular/);
   });
 
   //=========================================================
@@ -230,7 +226,7 @@ describe("Schedule (integration)", () => {
     const a = make_system({ fn: () => order.push("a") });
     schedule.add_systems(SCHEDULE.UPDATE, a);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a"]);
 
     order.length = 0;
@@ -238,7 +234,7 @@ describe("Schedule (integration)", () => {
     const b = make_system({ fn: () => order.push("b") });
     schedule.add_systems(SCHEDULE.UPDATE, b);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b"]);
   });
 
@@ -251,13 +247,13 @@ describe("Schedule (integration)", () => {
     const b = make_system({ fn: () => order.push("b") });
     schedule.add_systems(SCHEDULE.UPDATE, a, b);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["a", "b"]);
 
     order.length = 0;
     schedule.remove_system(a);
 
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
     expect(order).toEqual(["b"]);
   });
 
@@ -279,7 +275,7 @@ describe("Schedule (integration)", () => {
     });
 
     schedule.add_systems(SCHEDULE.UPDATE, sys);
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
 
     expect(created_entity).toBe(true);
   });
@@ -312,7 +308,7 @@ describe("Schedule (integration)", () => {
 
     schedule.add_systems(SCHEDULE.PRE_UPDATE, destroyer);
     schedule.add_systems(SCHEDULE.UPDATE, checker);
-    schedule.run_update(ctx, 0);
+    schedule.run_update(ctx, 0, 0);
 
     expect(alive_in_update).toBe(false);
   });
@@ -333,7 +329,7 @@ describe("Schedule (integration)", () => {
     });
 
     schedule.add_systems(SCHEDULE.FIXED_UPDATE, sys);
-    schedule.run_fixed_update(ctx, 1 / 50);
+    schedule.run_fixed_update(ctx, 1 / 50, 0);
 
     expect(received_dt).toBeCloseTo(1 / 50);
   });
@@ -346,13 +342,9 @@ describe("Schedule (integration)", () => {
     const a = make_system({ fn: () => order.push("a") });
     const b = make_system({ fn: () => order.push("b") });
 
-    schedule.add_systems(
-      SCHEDULE.FIXED_UPDATE,
-      { system: b, ordering: { after: [a] } },
-      a,
-    );
+    schedule.add_systems(SCHEDULE.FIXED_UPDATE, { system: b, ordering: { after: [a] } }, a);
 
-    schedule.run_fixed_update(ctx, 1 / 60);
+    schedule.run_fixed_update(ctx, 1 / 60, 0);
     expect(order).toEqual(["a", "b"]);
   });
 });

@@ -28,7 +28,7 @@ import {
   validate_and_cast,
   is_non_negative_integer,
   type TypedArrayTag,
-} from "type_primitives";
+} from "./type_primitives";
 
 export type ComponentID = Brand<number, "component_id">;
 export const as_component_id = (value: number) =>
@@ -77,5 +77,18 @@ export type ColumnsForFields<F extends ComponentFields> = {
 // are just branded numbers.
 declare const __schema: unique symbol;
 
-export type ComponentDef<S extends ComponentSchema = ComponentSchema> =
-  ComponentID & { readonly [__schema]: S };
+export type ComponentDef<S extends ComponentSchema = ComponentSchema> = ComponentID & {
+  readonly [__schema]: S;
+};
+
+/** Compile-time readonly view of a typed array column. Prevents index writes. */
+export interface ReadonlyColumn {
+  readonly [index: number]: number;
+  readonly length: number;
+}
+
+/** Compile-time readonly view of a Uint32Array. Prevents index writes. */
+export interface ReadonlyUint32Array {
+  readonly [index: number]: number;
+  readonly length: number;
+}

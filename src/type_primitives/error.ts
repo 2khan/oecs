@@ -6,11 +6,12 @@
  *
  ***/
 
-import { AppError } from "utils/error";
+import { AppError } from "../utils/error";
 
 export enum TYPE_ERROR {
   ASSERTION_FAIL_CONDITION = "ASSERTION_FAIL_CONDITION",
   VALIDATION_FAIL_CONDITION = "VALIDATION_FAIL_CONDITION",
+  ASSERTION_FAIL_NON_NULLABLE = "ASSERTION_FAIL_NON_NULLABLE",
 }
 
 export class TypeError extends AppError {

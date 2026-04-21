@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Store } from "../../store";
 
 import type { ComponentID } from "../../component";
-import { BitSet } from "type_primitives";
+import { BitSet } from "../../type_primitives";
 
 function make_mask(...ids: (number | ComponentID)[]): BitSet {
   const mask = new BitSet();
@@ -114,9 +114,7 @@ describe("Store (integration)", () => {
     }
 
     // All entities should be in the same archetype
-    const archetypes = store.get_matching_archetypes(
-      make_mask(Pos as ComponentID),
-    );
+    const archetypes = store.get_matching_archetypes(make_mask(Pos as ComponentID));
     expect(archetypes.length).toBe(1);
     const arch = archetypes[0];
     expect(arch.entity_count).toBe(10);
@@ -192,9 +190,7 @@ describe("Store (integration)", () => {
 
     // Query for [Pos] - 3 archetypes match: [Pos] (intermediate, created during
     // e1's first add_component), [Pos, Vel], and [Pos, Hp].
-    const pos_matches = store.get_matching_archetypes(
-      make_mask(Pos as ComponentID),
-    );
+    const pos_matches = store.get_matching_archetypes(make_mask(Pos as ComponentID));
     expect(pos_matches.length).toBe(3);
 
     // Both entities are found across matching archetypes
@@ -210,9 +206,7 @@ describe("Store (integration)", () => {
     expect(pos_vel_matches[0].entity_list).toContain(e1);
 
     // Query for [Hp] - only e2's archetype matches
-    const hp_matches = store.get_matching_archetypes(
-      make_mask(Hp as ComponentID),
-    );
+    const hp_matches = store.get_matching_archetypes(make_mask(Hp as ComponentID));
     expect(hp_matches.length).toBe(1);
     expect(hp_matches[0].entity_list).toContain(e2);
   });
@@ -227,9 +221,7 @@ describe("Store (integration)", () => {
     store.add_component(e1, Pos, { x: 0, y: 0, z: 0 });
 
     // No entity has Vel + Hp
-    const matches = store.get_matching_archetypes(
-      make_mask(Vel as ComponentID, Hp as ComponentID),
-    );
+    const matches = store.get_matching_archetypes(make_mask(Vel as ComponentID, Hp as ComponentID));
     expect(matches.length).toBe(0);
   });
 
@@ -258,9 +250,7 @@ describe("Store (integration)", () => {
     store.add_component(e1, Pos, { x: 1, y: 0, z: 0 });
     store.add_component(e2, Pos, { x: 2, y: 0, z: 0 });
 
-    const archetypes = store.get_matching_archetypes(
-      make_mask(Pos as ComponentID),
-    );
+    const archetypes = store.get_matching_archetypes(make_mask(Pos as ComponentID));
     expect(archetypes.length).toBe(1);
     expect(archetypes[0].entity_count).toBe(2);
 

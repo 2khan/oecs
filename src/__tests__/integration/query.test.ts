@@ -86,7 +86,10 @@ describe("ECS query (integration)", () => {
     world.add_component(e2, Hp, { hp: 50 });
 
     expect(q.archetype_count).toBeGreaterThan(before_len);
-    const entity_ids = [...q].flatMap((a) => [...a.entity_list]);
+    const entity_ids: number[] = [];
+    q.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entity_ids.push(a.entity_list[i]);
+    });
     expect(entity_ids).toContain(e2);
   });
 
@@ -147,14 +150,14 @@ describe("ECS query (integration)", () => {
     world.add_component(e1, Pos, { x: 10, y: 20 });
     world.add_component(e1, Vel, { vx: 1, vy: 2 });
 
-    for (const arch of world.query(Pos, Vel)) {
+    world.query(Pos, Vel).for_each((arch) => {
       const px = arch.get_column(Pos, "x");
       const vy = arch.get_column(Vel, "vy");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(px[i]).toBe(10);
         expect(vy[i]).toBe(2);
       }
-    }
+    });
   });
 
   //=========================================================
@@ -246,8 +249,11 @@ describe("ECS query (integration)", () => {
     // System 1 observes Pos query and defers adding Vel
     const s1 = world.register_system({
       fn(ctx) {
-        const entities = [...pos_query].flatMap((a) => [...a.entity_list]);
-        if (entities.includes(e1)) sys1_saw_pos = true;
+        const entities: number[] = [];
+        pos_query.for_each((a) => {
+          for (let i = 0; i < a.entity_count; i++) entities.push(a.entity_list[i]);
+        });
+        if (entities.includes(e1 as number)) sys1_saw_pos = true;
         ctx.add_component(e1, Vel, { vx: 0, vy: 0 });
       },
     });
@@ -298,10 +304,10 @@ describe("ECS query (integration)", () => {
   });
 
   //=========================================================
-  // for..of iteration
+  // for_each iteration
   //=========================================================
 
-  it("for..of yields non-empty archetypes with correct columns and count", () => {
+  it("for_each yields non-empty archetypes with correct columns and count", () => {
     const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
@@ -317,7 +323,7 @@ describe("ECS query (integration)", () => {
     let arch_count = 0;
     let total_entities = 0;
 
-    for (const arch of world.query(Pos, Vel)) {
+    world.query(Pos, Vel).for_each((arch) => {
       arch_count++;
       total_entities += arch.entity_count;
       // Verify typed columns are accessible
@@ -327,13 +333,13 @@ describe("ECS query (integration)", () => {
         expect(typeof px[i]).toBe("number");
         expect(typeof vx[i]).toBe("number");
       }
-    }
+    });
 
     expect(arch_count).toBe(1); // one archetype
     expect(total_entities).toBe(2);
   });
 
-  it("for..of skips archetypes with zero entities", () => {
+  it("for_each skips archetypes with zero entities", () => {
     const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
@@ -349,13 +355,13 @@ describe("ECS query (integration)", () => {
     world.flush();
 
     let arch_count = 0;
-    for (const _arch of q) {
+    q.for_each(() => {
       arch_count++;
-    }
+    });
     expect(arch_count).toBe(0);
   });
 
-  it("for..of iteration allows column mutation", () => {
+  it("for_each iteration allows column mutation", () => {
     const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
@@ -364,26 +370,26 @@ describe("ECS query (integration)", () => {
     world.add_component(e1, Pos, { x: 5, y: 7 });
     world.add_component(e1, Vel, { vx: 2, vy: 3 });
 
-    for (const arch of world.query(Pos, Vel)) {
-      const px = arch.get_column(Pos, "x");
-      const py = arch.get_column(Pos, "y");
+    world.query(Pos, Vel).for_each((arch) => {
+      const px = arch.get_column_mut(Pos, "x", 0);
+      const py = arch.get_column_mut(Pos, "y", 0);
       const vx = arch.get_column(Vel, "vx");
       const vy = arch.get_column(Vel, "vy");
       for (let i = 0; i < arch.entity_count; i++) {
         px[i] += vx[i]; // 5 + 2 = 7
         py[i] += vy[i]; // 7 + 3 = 10
       }
-    }
+    });
 
     // Verify mutation via get_column
-    for (const arch of world.query(Pos, Vel)) {
+    world.query(Pos, Vel).for_each((arch) => {
       const x = arch.get_column(Pos, "x");
       const y = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(x[i]).toBe(7);
         expect(y[i]).toBe(10);
       }
-    }
+    });
   });
 
   //=========================================================

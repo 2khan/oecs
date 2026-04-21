@@ -60,9 +60,9 @@ describe("Archetype scale", () => {
 
     const q = world.query(Common);
     let total = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       total += arch.entity_count;
-    }
+    });
     expect(total).toBe(1_000);
   });
 
@@ -110,12 +110,12 @@ describe("Archetype scale", () => {
     const q0 = world.query(tags[0]);
     let found_count = 0;
     const found_set = new Set<EntityID>();
-    for (const arch of q0) {
+    q0.for_each((arch) => {
       found_count += arch.entity_count;
-      for (const eid of arch.entity_list) {
-        found_set.add(eid as EntityID);
+      for (let i = 0; i < arch.entity_count; i++) {
+        found_set.add(arch.entity_list[i] as EntityID);
       }
-    }
+    });
 
     // Count how many entities should have tag 0 (odd indices)
     let expected = 0;

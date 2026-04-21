@@ -49,9 +49,9 @@ describe("Query scale", () => {
     // Query for comp[0] should find all 500 entities
     const q0 = world.query(comps[0]);
     let total = 0;
-    for (const arch of q0) {
+    q0.for_each((arch) => {
       total += arch.entity_count;
-    }
+    });
     expect(total).toBe(500);
 
     // Repeated calls return same cached query

@@ -20,7 +20,7 @@ describe("Destruction during system execution", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           const px = arch.get_column(Pos, "x");
           const py = arch.get_column(Pos, "y");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -32,7 +32,7 @@ describe("Destruction during system execution", () => {
             // All reads should succeed, including after the deferred destroy call
             valuesRead.push(px[i], py[i]);
           }
-        }
+        });
       },
       (qb) => qb.every(Pos),
     );
@@ -69,12 +69,12 @@ describe("Destruction during system execution", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             ctx.destroy_entity(arch.entity_list[i] as EntityID);
             iterationCount++;
           }
-        }
+        });
       },
       (qb) => qb.every(Pos),
     );
@@ -167,7 +167,7 @@ describe("Destruction during system execution", () => {
     const posQuery = world.query(Pos);
     const sys2 = world.register_system({
       fn() {
-        for (const arch of posQuery) {
+        posQuery.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             if (arch.entity_list[i] === e) {
               sys2SawEntity = true;
@@ -175,7 +175,7 @@ describe("Destruction during system execution", () => {
               sys2CouldReadField = px[i] === 42;
             }
           }
-        }
+        });
       },
     });
 
@@ -206,11 +206,11 @@ describe("Destruction during system execution", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             ctx.destroy_entity(arch.entity_list[i] as EntityID);
           }
-        }
+        });
       },
       (qb) => qb.every(Pos),
     );

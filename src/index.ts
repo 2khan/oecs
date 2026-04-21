@@ -6,13 +6,13 @@ export { SCHEDULE, type SystemEntry, type SystemOrdering } from "./schedule";
 
 // Systems
 export { SystemContext } from "./query";
-export type { SystemConfig, SystemDescriptor } from "./system";
+export type { SystemFn, SystemConfig, SystemDescriptor } from "./system";
 
 // Ref
-export type { ComponentRef } from "./ref";
+export type { ComponentRef, ReadonlyComponentRef } from "./ref";
 
 // Queries
-export { Query, QueryBuilder } from "./query";
+export { Query, QueryBuilder, ChangedQuery } from "./query";
 
 // Entities
 export type { EntityID } from "./entity";
@@ -25,10 +25,14 @@ export type {
   FieldValues,
   TagToTypedArray,
   ColumnsForSchema,
+  ReadonlyColumn,
+  ReadonlyUint32Array,
 } from "./component";
 
 // Events
-export type { EventDef, EventReader } from "./event";
+export type { EventReader, EventKey } from "./event";
+export { event_key, signal_key } from "./event";
 
 // Resources
-export type { ResourceDef, ResourceReader } from "./resource";
+export type { ResourceKey } from "./resource";
+export { resource_key } from "./resource";

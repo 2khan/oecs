@@ -1,47 +1,87 @@
 # Components
 
-## Registering Components
+A component is a named record of numeric fields attached to entities. Storage is Struct-of-Arrays: each field lives in its own typed array column, grouped by archetype (the exact set of components an entity has). Entities with identical component sets share one archetype and therefore share contiguous column buffers, which is what queries iterate over. At runtime, a component is just a branded integer ID — the field schema is carried as a phantom type parameter for compile-time safety only.
+
+## Exports
+
+From `oecs`:
+
+```ts
+import {
+  type ComponentDef,
+  type ComponentSchema,
+  type ComponentFields,
+  type FieldValues,
+  type TagToTypedArray,
+  type ColumnsForSchema,
+  type ReadonlyColumn,
+  type ReadonlyUint32Array,
+} from "oecs";
+```
+
+All component registration and per-entity operations are methods on the `ECS` world instance (`import { ECS } from "oecs"`).
+
+## Registering components
 
 ### Record syntax (per-field type control)
 
-Pass a record mapping field names to typed array tags. Each field's storage uses the specified typed array type.
+Pass a record mapping field names to typed array tags. Each field's column uses the specified typed array type.
 
 ```ts
 const Pos = world.register_component({ x: "f64", y: "f64" });
 const Health = world.register_component({ current: "i32", max: "i32" });
 ```
 
-The return type is `ComponentDef<S>` where `S` is the schema record (e.g. `ComponentDef<{x:"f64",y:"f64"}>`).
+The returned value is typed as `ComponentDef<S>` where `S` is the schema record (e.g. `ComponentDef<{ x: "f64", y: "f64" }>`).
 
-Supported tags: `"f32"`, `"f64"`, `"i8"`, `"i16"`, `"i32"`, `"u8"`, `"u16"`, `"u32"`.
+Supported tags (see `TagToTypedArray`):
+
+| Tag   | Typed array    |
+| ----- | -------------- |
+| `f32` | `Float32Array` |
+| `f64` | `Float64Array` |
+| `i8`  | `Int8Array`    |
+| `i16` | `Int16Array`   |
+| `i32` | `Int32Array`   |
+| `u8`  | `Uint8Array`   |
+| `u16` | `Uint16Array`  |
+| `u32` | `Uint32Array`  |
 
 ### Array shorthand (uniform type)
 
-Pass a `readonly` tuple of field names. All fields default to `"f64"`. An optional second argument overrides the type.
+Pass a `readonly` tuple of field names. All fields default to `"f64"`; an optional second argument overrides the type for every field.
 
 ```ts
-const Vel = world.register_component(["vx", "vy"] as const);           // f64
-const Flags = world.register_component(["a", "b"] as const, "u8");     // u8
+const Vel = world.register_component(["vx", "vy"] as const);        // all f64
+const Flags = world.register_component(["a", "b"] as const, "u8");  // all u8
 ```
 
-`as const` is required -- without it TypeScript widens the type to `string[]` and field-level type inference is lost.
+`as const` is required — without it TypeScript widens to `string[]` and per-field inference is lost.
 
-## Tags
+The exact signatures:
 
-Tags are components with no fields. They participate in archetype matching and queries but store no data.
+```ts
+register_component<S extends Record<string, TypedArrayTag>>(schema: S): ComponentDef<S>;
+register_component<const F extends readonly string[], T extends TypedArrayTag = "f64">(
+  fields: F,
+  type?: T,
+): ComponentDef<{ readonly [K in F[number]]: T }>;
+```
+
+## Tags (zero-field components)
+
+Tags are components with an empty schema. They participate in archetype matching and queries but store no data.
 
 ```ts
 const IsEnemy = world.register_tag();
 const Frozen = world.register_tag();
 ```
 
-Return type: `ComponentDef<Record<string, never>>`.
+The return type is `ComponentDef<Record<string, never>>`. Tag-only archetypes skip all column operations during entity transitions — only the entity ID list is maintained.
 
-Internally, tag-only archetypes skip all column operations (push, pop, copy, swap) during entity transitions -- only the entity ID list is maintained.
+## Adding components
 
-## Adding Components
-
-Data components require a values object:
+Data components require a values object whose shape matches the schema:
 
 ```ts
 const e = world.create_entity();
@@ -55,16 +95,25 @@ Tags take no values argument:
 world.add_component(e, IsEnemy);
 ```
 
-If the entity already has the component, values are overwritten in-place with no archetype transition:
+If the entity already has the component, the existing values are overwritten in place with no archetype transition:
 
 ```ts
 world.add_component(e, Pos, { x: 10, y: 20 });
-world.add_component(e, Pos, { x: 99, y: 0 }); // overwrites, no transition
+world.add_component(e, Pos, { x: 99, y: 0 }); // overwrite, no transition
 ```
 
-## Adding Multiple Components
+`add_component` returns `this` so calls can be chained:
 
-`add_components` resolves the final archetype first, then performs a single entity move instead of intermediate transitions per component.
+```ts
+world
+  .add_component(e, Pos, { x: 0, y: 0 })
+  .add_component(e, Vel, { vx: 1, vy: 2 })
+  .add_component(e, IsEnemy);
+```
+
+### Adding several components at once
+
+`add_components` walks the archetype graph through all adds, resolves the final target archetype, and performs a single entity move instead of one move per component.
 
 ```ts
 world.add_components(e, [
@@ -74,9 +123,7 @@ world.add_components(e, [
 ]);
 ```
 
-This is cheaper than three separate `add_component` calls when the entity needs multiple new components at once.
-
-## Removing Components
+## Removing components
 
 Single removal:
 
@@ -84,52 +131,19 @@ Single removal:
 world.remove_component(e, Vel);
 ```
 
-Both `add_component` and `remove_component` return `this`, so calls can be chained:
+`remove_component` returns `this`, so calls can be chained. Removing a component the entity does not have is a no-op.
 
-```ts
-world.add_component(e, Pos, { x: 0, y: 0 }).add_component(e, Vel, { vx: 1, vy: 2 });
-world.remove_component(e, Vel).remove_component(e, Frozen);
-```
-
-`remove_components` avoids intermediate archetype transitions:
+`remove_components` coalesces multiple removals into a single transition:
 
 ```ts
 world.remove_components(e, Pos, Vel, IsEnemy);
 ```
 
-Removing a component the entity does not have is a no-op.
-
-## Bulk Operations
-
-`batch_add_component` and `batch_remove_component` operate on ALL entities in an archetype at once. Instead of moving entities one by one (O(N×columns)), they use `TypedArray.set()` for a single O(columns) bulk copy.
-
-```ts
-const Burning = world.register_tag();
-const Shield = world.register_component({ strength: "f32" });
-
-// Add Burning to every entity that has Health
-for (const arch of world.query(Health)) {
-  world.batch_add_component(arch, Burning);
-}
-
-// Give every enemy a shield
-for (const arch of world.query(IsEnemy)) {
-  world.batch_add_component(arch, Shield, { strength: 50 });
-}
-
-// Strip shields from all enemies
-for (const arch of world.query(IsEnemy, Shield)) {
-  world.batch_remove_component(arch, Shield);
-}
-```
-
-After a bulk operation, the source archetype is emptied — all its entities move to the target archetype. If the archetype already has the component (for add) or doesn't have it (for remove), the call is a no-op.
-
-## Checking Components
+## Checking for a component
 
 ```ts
 if (world.has_component(e, Pos)) {
-  // entity has the Pos component
+  // ...
 }
 
 world.has_component(e, IsEnemy); // works for tags too
@@ -137,39 +151,104 @@ world.has_component(e, IsEnemy); // works for tags too
 
 Returns `boolean`.
 
-## Typed Array Columns
+## Reading and writing a single field
 
-Column data is stored in typed arrays, not plain `number[]`. The `get_column()` method returns the specific typed array matching the field's tag:
+For random-access single-entity reads and writes, the world exposes `get_field` and `set_field`:
 
 ```ts
-const Pos = world.register_component({ x: "f64", y: "f64" });
-const Health = world.register_component({ current: "i32", max: "i32" });
-
-for (const arch of query) {
-  const px = arch.get_column(Pos, "x");       // Float64Array
-  const hp = arch.get_column(Health, "current"); // Int32Array
-}
+get_field<S>(entity_id: EntityID, def: ComponentDef<S>, field: string & keyof S): number;
+set_field<S>(entity_id: EntityID, def: ComponentDef<S>, field: string & keyof S, value: number): void;
 ```
 
-TypeScript infers the return type from the schema, so `get_column(Pos, "x")` is typed as `Float64Array` and `get_column(Health, "current")` is typed as `Int32Array`.
+```ts
+const hp = world.get_field(e, Health, "current");
+world.set_field(e, Health, "current", hp - 10);
+```
 
-## Phantom Typing
+`set_field` marks the component's column as changed at the current world tick, so change-detection queries see the write. For bulk hot-loop mutation inside a system, prefer `arch.get_column_mut(def, field, tick)` over many `set_field` calls.
 
-`ComponentDef<S>` is a branded `number` at runtime (specifically a `ComponentID`). The generic parameter `S` exists only at compile time via a phantom symbol:
+## `ComponentDef<S>` and phantom typing
+
+At runtime, `ComponentDef<S>` is just a branded integer (`ComponentID`). The generic parameter `S extends ComponentSchema` exists only at compile time via a phantom symbol:
 
 ```ts
 declare const __schema: unique symbol;
-type ComponentDef<S extends ComponentSchema> = ComponentID & {
+
+export type ComponentDef<S extends ComponentSchema = ComponentSchema> = ComponentID & {
   readonly [__schema]: S;
+};
+
+export type ComponentSchema = Readonly<Record<string, TypedArrayTag>>;
+```
+
+Because `S` flows through the type system:
+
+- `add_component(e, Pos, ...)` requires `{ x: number, y: number }`. Missing or extra fields are compile errors.
+- `get_field(e, Pos, "x")` only accepts `"x" | "y"` for the field argument.
+- `arch.get_column(Pos, "x")` accepts only `"x" | "y"`; `arch.get_column_mut(Pos, "x", tick)` is typed as `Float64Array`, while `get_column_mut(Health, "current", tick)` is typed as `Int32Array` — the return is derived from `S` via `TagToTypedArray`.
+
+No wrapper objects, no maps — the ID is a plain integer and all the richness is compile-time only.
+
+Related helper types:
+
+```ts
+// Per-field value object used by add_component / add_components:
+type FieldValues<S extends ComponentSchema> = { readonly [K in keyof S]: number };
+
+// Per-field column map (typed array per field):
+type ColumnsForSchema<S extends ComponentSchema> = {
+  readonly [K in keyof S]: TagToTypedArray[S[K]];
 };
 ```
 
-Where `ComponentSchema = Readonly<Record<string, TypedArrayTag>>`.
+## `ReadonlyColumn` and `ReadonlyUint32Array` (new in v0.3.0)
 
-At runtime `Pos` is just a number (the component's internal ID). At compile time it carries `{x:"f64",y:"f64"}`, which flows through the entire API:
+To make accidental writes to column buffers a compile-time error, archetype read accessors return structural read-only views rather than bare typed arrays:
 
-- `add_component(e, Pos, ...)` requires `{ x: number, y: number }` -- missing or extra fields are compile errors.
-- `archetype.get_column(Pos, "x")` accepts only `"x" | "y"` for the field argument and returns `Float64Array`.
-- Array shorthand `["vx", "vy"] as const` is normalized to `{readonly vx: "f64", readonly vy: "f64"}` internally.
+```ts
+export interface ReadonlyColumn {
+  readonly [index: number]: number;
+  readonly length: number;
+}
 
-This gives full type safety with zero runtime overhead -- no wrapper objects, no maps, just a plain integer ID.
+export interface ReadonlyUint32Array {
+  readonly [index: number]: number;
+  readonly length: number;
+}
+```
+
+These are used by:
+
+- `Archetype.get_column(def, field)` — returns `ReadonlyColumn`. Reads only; attempting `col[i] = v` is a type error.
+- `Archetype.entity_ids` — returns `ReadonlyUint32Array`.
+
+To mutate a column, use `get_column_mut`, which takes a tick and returns the concrete typed array:
+
+```ts
+// Read-only iteration
+q.for_each((arch) => {
+  const px = arch.get_column(Pos, "x");      // ReadonlyColumn
+  const py = arch.get_column(Pos, "y");      // ReadonlyColumn
+  for (let i = 0; i < arch.entity_count; i++) {
+    doSomething(px[i], py[i]);
+  }
+});
+
+// Mutation
+q.for_each((arch) => {
+  const px = arch.get_column_mut(Pos, "x", ctx.world_tick); // Float64Array
+  for (let i = 0; i < arch.entity_count; i++) px[i] += 1;
+});
+```
+
+At runtime both methods return the same underlying typed array — the distinction is purely in the TypeScript types.
+
+## Notes
+
+### Archetype transitions
+
+Every `add_component` / `remove_component` that changes the entity's component set moves the entity from its source archetype to a target archetype: its row is copied into the target, and the source row is swap-removed. The add/remove edges between archetypes are cached on first use, so repeated transitions (e.g. "add `Vel` to `[Pos]`") resolve in O(1) thereafter. Re-adding a component the entity already has, or removing one it does not have, does not transition.
+
+### Write change detection
+
+`set_field` and `get_column_mut` stamp the component's per-archetype change tick with the current world tick. Plain reads via `get_field` and `get_column` do not. This is what the `ChangedQuery` API keys on — see [change-detection.md](./change-detection.md) for details.

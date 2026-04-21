@@ -18,12 +18,12 @@ describe("Structural changes mid-system are properly deferred", () => {
     const sys = world.register_system(
       (q, ctx) => {
         // Iterate over Pos-only entities and add Vel to one
-        for (const arch of q) {
+        q.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             const eid = arch.entity_list[i] as EntityID;
             ctx.add_component(eid, Vel, { vx: 10, vy: 20 });
           }
-        }
+        });
         // Pos+Vel query should still be empty during this system
         countDuringSystem = posVelQuery.archetype_count;
       },
@@ -60,7 +60,7 @@ describe("Structural changes mid-system are properly deferred", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           const px = arch.get_column(Pos, "x");
           const vx = arch.get_column(Vel, "vx");
           for (let i = 0; i < arch.entity_count; i++) {
@@ -71,7 +71,7 @@ describe("Structural changes mid-system are properly deferred", () => {
             // All columns should remain valid for the entire loop
             valuesRead.push(px[i], vx[i]);
           }
-        }
+        });
       },
       (qb) => qb.every(Pos, Vel),
     );
@@ -102,7 +102,7 @@ describe("Structural changes mid-system are properly deferred", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             const eid = arch.entity_list[i];
             // When iterating eB, add Tag to eA
@@ -110,7 +110,7 @@ describe("Structural changes mid-system are properly deferred", () => {
               ctx.add_component(eA, Tag);
             }
           }
-        }
+        });
       },
       (qb) => qb.every(Pos),
     );
@@ -146,12 +146,12 @@ describe("Structural changes mid-system are properly deferred", () => {
 
     const sys = world.register_system(
       (q, ctx) => {
-        for (const arch of q) {
+        q.for_each((arch) => {
           for (let i = 0; i < arch.entity_count; i++) {
             const eid = arch.entity_list[i] as EntityID;
             ctx.add_component(eid, Vel, { vx: 1, vy: 2 });
           }
-        }
+        });
       },
       (qb) => qb.every(Pos),
     );
@@ -162,9 +162,9 @@ describe("Structural changes mid-system are properly deferred", () => {
 
     // After flush, all 100 entities should be in the Pos+Vel query
     let total = 0;
-    for (const arch of posVelQuery) {
+    posVelQuery.for_each((arch) => {
       total += arch.entity_count;
-    }
+    });
     expect(total).toBe(100);
 
     // Verify field values survived the transition

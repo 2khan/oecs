@@ -24,11 +24,16 @@
 
 import type { ComponentSchema } from "./component";
 import type { ArchetypeColumnLayout } from "./archetype";
-import type { GrowableTypedArray, AnyTypedArray } from "type_primitives";
+import type { GrowableTypedArray, AnyTypedArray } from "./type_primitives";
 
 /** Maps component schema to scalar get/set properties: { x: number, y: number }. */
 export type ComponentRef<S extends ComponentSchema> = {
   -readonly [K in keyof S]: number;
+};
+
+/** Read-only view of a component reference. Prevents field writes at compile time. */
+export type ReadonlyComponentRef<S extends ComponentSchema> = {
+  readonly [K in keyof S]: number;
 };
 
 interface RefInternal {

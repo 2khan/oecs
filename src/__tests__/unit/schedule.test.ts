@@ -131,7 +131,7 @@ describe("Schedule", () => {
     const schedule = new Schedule();
     const ctx = make_ctx();
 
-    expect(() => schedule.run_startup(ctx)).not.toThrow();
-    expect(() => schedule.run_update(ctx, 0.016)).not.toThrow();
+    expect(() => schedule.run_startup(ctx, 0)).not.toThrow();
+    expect(() => schedule.run_update(ctx, 0.016, 0)).not.toThrow();
   });
 });

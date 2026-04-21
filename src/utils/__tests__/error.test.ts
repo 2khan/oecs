@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AppError } from "utils/error";
+import { AppError } from "../error";
 import { ECSError, ECS_ERROR, is_ecs_error } from "../error";
 
 describe("ECSError", () => {
@@ -18,10 +18,7 @@ describe("ECSError", () => {
   });
 
   it("uses provided message when given", () => {
-    const err = new ECSError(
-      ECS_ERROR.EID_MAX_INDEX_OVERFLOW,
-      "index exceeded limit",
-    );
+    const err = new ECSError(ECS_ERROR.EID_MAX_INDEX_OVERFLOW, "index exceeded limit");
     expect(err.message).toBe("index exceeded limit");
   });
 

@@ -32,7 +32,7 @@
  *
  *   const moveSys = world.register_system(
  *     (q, _ctx, dt) => {
- *       for (const arch of q) {
+ *       q.for_each((arch) => {
  *         const px = arch.get_column(Pos, "x");
  *         const py = arch.get_column(Pos, "y");
  *         const vx = arch.get_column(Vel, "vx");
@@ -41,7 +41,7 @@
  *           px[i] += vx[i] * dt;
  *           py[i] += vy[i] * dt;
  *         }
- *       }
+ *       });
  *     },
  *     (qb) => qb.every(Pos, Vel),
  *   );
@@ -72,16 +72,11 @@ import type {
   ComponentFields,
   FieldValues,
 } from "./component";
-import type { EventDef } from "./event";
-import type { ResourceDef, ResourceReader } from "./resource";
-import {
-  as_system_id,
-  type SystemFn,
-  type SystemConfig,
-  type SystemDescriptor,
-} from "./system";
+import type { EventDef, EventKey, EventReader } from "./event";
+import type { ResourceKey } from "./resource";
+import { as_system_id, type SystemFn, type SystemConfig, type SystemDescriptor } from "./system";
 import type { SystemEntry } from "./schedule";
-import { BitSet, type TypedArrayTag } from "type_primitives";
+import { BitSet, unsafe_cast, type TypedArrayTag } from "./type_primitives";
 import { bucket_push } from "./utils/arrays";
 import { ECSError, ECS_ERROR } from "./utils/error";
 import {
@@ -105,6 +100,9 @@ export class ECS implements QueryResolver {
 
   private readonly systems: Set<SystemDescriptor> = new Set();
   private next_system_id = 0;
+
+  // Tick counter for change detection
+  private _tick: number = 0;
 
   // Fixed timestep accumulator
   private _fixed_timestep: number;
@@ -141,7 +139,8 @@ export class ECS implements QueryResolver {
   public register_component<S extends Record<string, TypedArrayTag>>(schema: S): ComponentDef<S>;
   // Overload 2: array shorthand (uniform type, defaults to "f64")
   public register_component<const F extends readonly string[], T extends TypedArrayTag = "f64">(
-    fields: F, type?: T,
+    fields: F,
+    type?: T,
   ): ComponentDef<{ readonly [K in F[number]]: T }>;
   // Implementation
   public register_component(
@@ -161,37 +160,28 @@ export class ECS implements QueryResolver {
     return this.store.register_component({} as Record<string, never>);
   }
 
-  public register_event<F extends readonly string[]>(fields: F): EventDef<F> {
-    return this.store.register_event(fields);
+  public register_event<F extends readonly string[]>(key: EventKey<F>, fields: F): void {
+    this.store.register_event_by_key(key, fields);
   }
 
-  public register_signal(): EventDef<readonly []> {
-    return this.store.register_event([] as const);
+  public register_signal(key: EventKey<readonly []>): void {
+    this.store.register_event_by_key(key, [] as unknown as readonly string[]);
   }
 
-  public register_resource<F extends readonly string[]>(
-    fields: F,
-    initial: { readonly [K in F[number]]: number },
-  ): ResourceDef<F> {
-    return this.store.register_resource(
-      fields,
-      initial as Record<string, number>,
-    );
+  public register_resource<T>(key: ResourceKey<T>, value: T): void {
+    this.store.register_resource(key, value);
   }
 
-  public resource<F extends ComponentFields>(
-    def: ResourceDef<F>,
-  ): ResourceReader<F> {
-    return this.store.get_resource_reader(def);
+  public resource<T>(key: ResourceKey<T>): T {
+    return unsafe_cast<T>(this.store.get_resource(key));
   }
 
-  public set_resource<F extends ComponentFields>(
-    def: ResourceDef<F>,
-    values: { readonly [K in F[number]]: number },
-  ): void {
-    this.store
-      .get_resource_channel(def)
-      .write(values as Record<string, number>);
+  public set_resource<T>(key: ResourceKey<T>, value: T): void {
+    this.store.set_resource(key, value);
+  }
+
+  public has_resource<T>(key: ResourceKey<T>): boolean {
+    return this.store.has_resource(key);
   }
 
   public create_entity(): EntityID {
@@ -210,10 +200,7 @@ export class ECS implements QueryResolver {
     return this.store.entity_count;
   }
 
-  public add_component(
-    entity_id: EntityID,
-    def: ComponentDef<Record<string, never>>,
-  ): this;
+  public add_component(entity_id: EntityID, def: ComponentDef<Record<string, never>>): this;
   public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -238,25 +225,16 @@ export class ECS implements QueryResolver {
     this.store.add_components(entity_id, entries);
   }
 
-  public remove_component(
-    entity_id: EntityID,
-    def: ComponentDef,
-  ): this {
+  public remove_component(entity_id: EntityID, def: ComponentDef): this {
     this.store.remove_component(entity_id, def);
     return this;
   }
 
-  public remove_components(
-    entity_id: EntityID,
-    ...defs: ComponentDef[]
-  ): void {
+  public remove_components(entity_id: EntityID, ...defs: ComponentDef[]): void {
     this.store.remove_components(entity_id, defs);
   }
 
-  public has_component(
-    entity_id: EntityID,
-    def: ComponentDef,
-  ): boolean {
+  public has_component(entity_id: EntityID, def: ComponentDef): boolean {
     return this.store.has_component(entity_id, def);
   }
 
@@ -264,10 +242,7 @@ export class ECS implements QueryResolver {
    * Bulk add a component to ALL entities in the given archetype.
    * O(columns) via TypedArray.set() instead of O(N×columns).
    */
-  public batch_add_component(
-    src_arch: Archetype,
-    def: ComponentDef<Record<string, never>>,
-  ): void;
+  public batch_add_component(src_arch: Archetype, def: ComponentDef<Record<string, never>>): void;
   public batch_add_component<S extends ComponentSchema>(
     src_arch: Archetype,
     def: ComponentDef<S>,
@@ -285,10 +260,7 @@ export class ECS implements QueryResolver {
    * Bulk remove a component from ALL entities in the given archetype.
    * O(columns) via TypedArray.set() instead of O(N×columns).
    */
-  public batch_remove_component(
-    src_arch: Archetype,
-    def: ComponentDef,
-  ): void {
+  public batch_remove_component(src_arch: Archetype, def: ComponentDef): void {
     this.store.batch_remove_component(src_arch, def);
   }
 
@@ -298,8 +270,7 @@ export class ECS implements QueryResolver {
     field: string & keyof S,
   ): number {
     if (__DEV__) {
-      if (!this.store.is_alive(entity_id))
-        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+      if (!this.store.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
@@ -313,24 +284,21 @@ export class ECS implements QueryResolver {
     value: number,
   ): void {
     if (__DEV__) {
-      if (!this.store.is_alive(entity_id))
-        throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+      if (!this.store.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     }
     const arch = this.store.get_entity_archetype(entity_id);
     const row = this.store.get_entity_row(entity_id);
-    const col = arch.get_column(def, field);
+    const col = arch.get_column_mut(def, field, this.store._tick);
     col[row] = value;
   }
 
-  public emit(def: EventDef<readonly []>): void;
+  public emit(key: EventKey<readonly []>): void;
   public emit<F extends ComponentFields>(
-    def: EventDef<F>,
+    key: EventKey<F>,
     values: { readonly [K in F[number]]: number },
   ): void;
-  public emit(
-    def: EventDef<ComponentFields>,
-    values?: Record<string, number>,
-  ): void {
+  public emit(key: EventKey<ComponentFields>, values?: Record<string, number>): void {
+    const def = this.store.get_event_def_by_key(key);
     if (values === undefined) {
       this.store.emit_signal(def as EventDef<readonly []>);
     } else {
@@ -338,9 +306,12 @@ export class ECS implements QueryResolver {
     }
   }
 
-  public query<T extends ComponentDef[]>(
-    ...defs: T
-  ): Query<T> {
+  public read<F extends ComponentFields>(key: EventKey<F>): EventReader<F> {
+    const def = this.store.get_event_def_by_key(key);
+    return this.store.get_event_reader(def) as EventReader<F>;
+  }
+
+  public query<T extends ComponentDef[]>(...defs: T): Query<T> {
     // Reuse scratch_mask to avoid allocating a new BitSet per query call.
     // Zero it out, set bits, then copy for the cache key.
     const mask = this.scratch_mask;
@@ -349,6 +320,10 @@ export class ECS implements QueryResolver {
       mask.set(defs[i] as unknown as number);
     }
     return this._resolve_query(mask.copy(), null, null, defs);
+  }
+
+  public _get_last_run_tick(): number {
+    return this.ctx.last_run_tick;
   }
 
   /** QueryResolver implementation — creates or retrieves a cached Query. */
@@ -374,11 +349,7 @@ export class ECS implements QueryResolver {
 
     // Store.register_query returns a live Archetype[] that the Store will
     // push new matching archetypes into as they are created
-    const result = this.store.register_query(
-      include,
-      exclude ?? undefined,
-      any_of ?? undefined,
-    );
+    const result = this.store.register_query(include, exclude ?? undefined, any_of ?? undefined);
     const q = new Query(
       result,
       defs as ComponentDef[],
@@ -387,6 +358,7 @@ export class ECS implements QueryResolver {
       exclude?.copy() ?? null,
       any_of?.copy() ?? null,
     );
+    this.store.update_query_ref(result, q);
     bucket_push(this.query_cache, key, {
       include_mask: include.copy(),
       exclude_mask: exclude?.copy() ?? null,
@@ -431,7 +403,7 @@ export class ECS implements QueryResolver {
    *
    *   // Function + query builder
    *   world.register_system(
-   *     (q, ctx, dt) => { for (const arch of q) { ... } },
+   *     (q, ctx, dt) => { q.for_each((arch) => { ... }); },
    *     (qb) => qb.every(Pos, Vel),
    *   );
    *
@@ -470,17 +442,12 @@ export class ECS implements QueryResolver {
     }
 
     const id = as_system_id(this.next_system_id++);
-    const descriptor: SystemDescriptor = Object.freeze(
-      Object.assign({ id }, config),
-    );
+    const descriptor: SystemDescriptor = Object.freeze(Object.assign({ id }, config));
     this.systems.add(descriptor);
     return descriptor;
   }
 
-  public add_systems(
-    label: SCHEDULE,
-    ...entries: (SystemDescriptor | SystemEntry)[]
-  ): this {
+  public add_systems(label: SCHEDULE, ...entries: (SystemDescriptor | SystemEntry)[]): this {
     this.schedule.add_systems(label, ...entries);
     return this;
   }
@@ -499,10 +466,12 @@ export class ECS implements QueryResolver {
     for (const descriptor of this.systems.values()) {
       descriptor.on_added?.(this.ctx);
     }
-    this.schedule.run_startup(this.ctx);
+    this.schedule.run_startup(this.ctx, this._tick);
   }
 
   public update(dt: number): void {
+    this.store._tick = this._tick;
+
     if (this.schedule.has_fixed_systems()) {
       this._accumulator += dt;
       const max_acc = this._max_fixed_steps * this._fixed_timestep;
@@ -510,13 +479,14 @@ export class ECS implements QueryResolver {
         this._accumulator = max_acc;
       }
       while (this._accumulator >= this._fixed_timestep) {
-        this.schedule.run_fixed_update(this.ctx, this._fixed_timestep);
+        this.schedule.run_fixed_update(this.ctx, this._fixed_timestep, this._tick);
         this._accumulator -= this._fixed_timestep;
       }
     }
 
-    this.schedule.run_update(this.ctx, dt);
+    this.schedule.run_update(this.ctx, dt, this._tick);
     this.store.clear_events();
+    this._tick++;
   }
 
   public flush(): void {
