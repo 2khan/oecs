@@ -179,6 +179,6 @@ entry points change shape; see the migration notes under *Breaking changes*.
    (bypassing `ECS.update()`), `run_startup`, `run_update`, and
    `run_fixed_update` now require a `tick: number` argument.
 
-## [0.1.x]
+## [0.2.1] and earlier
 
 Prior releases — see git history.
