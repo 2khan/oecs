@@ -23,12 +23,12 @@ describe("Column buffer invalidation", () => {
       world.add_component(e, Pos, { x: i, y: i * 10 });
     }
 
-    // Grab column ref while capacity is 4
+    // Grab column ref while capacity is 4 (mutable so we can test stale writes)
     const q = world.query(Pos);
     let staleX: Float64Array | null = null;
-    for (const arch of q) {
-      staleX = arch.get_column(Pos, "x");
-    }
+    q.for_each((arch) => {
+      staleX = arch.get_column_mut(Pos, "x", 0);
+    });
     expect(staleX).not.toBeNull();
 
     // Now add 10 more entities — forces the column to grow past 4 → 8 → 16
@@ -39,9 +39,9 @@ describe("Column buffer invalidation", () => {
 
     // Grab fresh column ref
     let freshX: Float64Array | null = null;
-    for (const arch of q) {
-      freshX = arch.get_column(Pos, "x");
-    }
+    q.for_each((arch) => {
+      freshX = arch.get_column_mut(Pos, "x", 0);
+    });
 
     // The underlying buffer was reallocated — old ref should be a DIFFERENT object
     expect(freshX).not.toBe(staleX);
@@ -155,13 +155,13 @@ describe("Swap-and-pop multi-column integrity", () => {
     // Verify via column iteration that data is dense and correct
     const q = world.query(Pos);
     const seen = new Map<number, number>(); // x → y
-    for (const arch of q) {
+    q.for_each((arch) => {
       const cx = arch.get_column(Pos, "x");
       const cy = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         seen.set(cx[i], cy[i]);
       }
-    }
+    });
 
     expect(seen.size).toBe(4);
     expect(seen.get(0)).toBe(0);
@@ -507,9 +507,9 @@ describe("Query iteration edge cases", () => {
     // Query should have grown live to include both archetypes
     // (plus potentially intermediate [Pos]-only archetypes from transitions)
     let total = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       total += arch.entity_count;
-    }
+    });
     expect(total).toBe(2);
   });
 
@@ -561,11 +561,11 @@ describe("Query iteration edge cases", () => {
     // entity_list should contain exactly {e0, e2, e3, e4} (in some order)
     const q = world.query(Pos);
     const listed = new Set<number>();
-    for (const arch of q) {
+    q.for_each((arch) => {
       for (let i = 0; i < arch.entity_count; i++) {
         listed.add(arch.entity_list[i]);
       }
-    }
+    });
 
     expect(listed.size).toBe(4);
     expect(listed.has(entities[0] as number)).toBe(true);
@@ -893,13 +893,13 @@ describe("Deferred destroy + structural interaction", () => {
     // The [Pos, Vel] archetype should only have the survivor, not ghost data from e
     const q = world.query(Pos, Vel);
     let totalEntities = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       totalEntities += arch.entity_count;
       // Verify all entities in the archetype are actually alive
       for (let i = 0; i < arch.entity_count; i++) {
         expect(world.is_alive(arch.entity_list[i] as EntityID)).toBe(true);
       }
-    }
+    });
     expect(totalEntities).toBe(1);
     expect(world.get_field(survivor, Vel, "vx")).toBe(30);
   });

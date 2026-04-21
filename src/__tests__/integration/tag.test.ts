@@ -92,15 +92,15 @@ describe("Tag components", () => {
     expect(world.has_component(e, Pos)).toBe(true);
     expect(world.has_component(e, Tag)).toBe(false);
 
-    // Verify position data survived via for..of
-    for (const arch of world.query(Pos)) {
+    // Verify position data survived via for_each
+    world.query(Pos).for_each((arch) => {
       const px = arch.get_column(Pos, "x");
       const py = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(px[i]).toBe(42);
         expect(py[i]).toBe(99);
       }
-    }
+    });
   });
 
   //=========================================================
@@ -121,7 +121,10 @@ describe("Tag components", () => {
 
     // Query requiring tag should only match e1
     const q = world.query(Pos).and(IsEnemy);
-    const entities = [...q].flatMap((a) => [...a.entity_list]);
+    const entities: number[] = [];
+    q.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entities.push(a.entity_list[i]);
+    });
     expect(entities).toContain(e1);
     expect(entities).not.toContain(e2);
   });
@@ -139,7 +142,10 @@ describe("Tag components", () => {
     world.add_component(dead, IsDead);
 
     const q = world.query(Pos).not(IsDead);
-    const entities = [...q].flatMap((a) => [...a.entity_list]);
+    const entities: number[] = [];
+    q.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entities.push(a.entity_list[i]);
+    });
     expect(entities).toContain(alive);
     expect(entities).not.toContain(dead);
   });
@@ -151,13 +157,13 @@ describe("Tag components", () => {
     const e = world.create_entity();
     world.add_component(e, Tag);
 
-    // Verify via for..of — tag archetype has no columns for the tag
+    // Verify via for_each — tag archetype has no columns for the tag
     let checked = false;
-    for (const arch of world.query(Tag)) {
+    world.query(Tag).for_each((arch) => {
       expect(arch.entity_count).toBe(1);
       expect(arch.has_columns).toBe(false);
       checked = true;
-    }
+    });
     expect(checked).toBe(true);
   });
 
@@ -208,13 +214,19 @@ describe("Tag components", () => {
 
     // Query for TagA + TagB should match both
     const q_ab = world.query(TagA).and(TagB);
-    const entities_ab = [...q_ab].flatMap((a) => [...a.entity_list]);
+    const entities_ab: number[] = [];
+    q_ab.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entities_ab.push(a.entity_list[i]);
+    });
     expect(entities_ab).toContain(e1);
     expect(entities_ab).toContain(e2);
 
     // Query for TagA + TagB + TagC should only match e2
     const q_abc = world.query(TagA).and(TagB, TagC);
-    const entities_abc = [...q_abc].flatMap((a) => [...a.entity_list]);
+    const entities_abc: number[] = [];
+    q_abc.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entities_abc.push(a.entity_list[i]);
+    });
     expect(entities_abc).not.toContain(e1);
     expect(entities_abc).toContain(e2);
   });
@@ -239,32 +251,38 @@ describe("Tag components", () => {
 
     // All enemies with position
     const q_enemies = world.query(Pos).and(IsEnemy);
-    const enemies = [...q_enemies].flatMap((a) => [...a.entity_list]);
+    const enemies: number[] = [];
+    q_enemies.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) enemies.push(a.entity_list[i]);
+    });
     expect(enemies).toContain(minion);
     expect(enemies).toContain(boss);
 
     // Only bosses
     const q_bosses = world.query(Pos).and(IsEnemy, IsBoss);
-    const bosses = [...q_bosses].flatMap((a) => [...a.entity_list]);
+    const bosses: number[] = [];
+    q_bosses.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) bosses.push(a.entity_list[i]);
+    });
     expect(bosses).not.toContain(minion);
     expect(bosses).toContain(boss);
 
     // Data columns still accessible alongside tags
-    for (const arch of q_bosses) {
+    q_bosses.for_each((arch) => {
       const px = arch.get_column(Pos, "x");
       const py = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(px[i]).toBe(10);
         expect(py[i]).toBe(10);
       }
-    }
+    });
   });
 
   //=========================================================
-  // Iterator skips empty archetypes
+  // for_each skips empty archetypes
   //=========================================================
 
-  it("iterator skips empty archetypes", () => {
+  it("for_each skips empty archetypes", () => {
     const world = new ECS();
     const Pos = world.register_component(Position);
 
@@ -277,14 +295,14 @@ describe("Tag components", () => {
     world.destroy_entity_deferred(e1);
     world.flush();
 
-    const iterated: any[] = [];
-    for (const arch of q) {
-      iterated.push(arch);
-    }
-    expect(iterated.length).toBe(0);
+    let iterated_count = 0;
+    q.for_each(() => {
+      iterated_count++;
+    });
+    expect(iterated_count).toBe(0);
   });
 
-  it("iterator yields only non-empty archetypes", () => {
+  it("for_each yields only non-empty archetypes", () => {
     const world = new ECS();
     const Pos = world.register_component(Position);
     const Vel = world.register_component(Velocity);
@@ -306,9 +324,12 @@ describe("Tag components", () => {
     world.destroy_entity_deferred(e1);
     world.flush();
 
-    // Iterator should skip the empty one
-    const iterated = [...q];
-    expect(iterated.length).toBe(1);
-    expect(iterated[0].entity_count).toBeGreaterThan(0);
+    // for_each should skip the empty one
+    let iterated_count = 0;
+    q.for_each((arch) => {
+      iterated_count++;
+      expect(arch.entity_count).toBeGreaterThan(0);
+    });
+    expect(iterated_count).toBe(1);
   });
 });

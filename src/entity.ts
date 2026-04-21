@@ -18,7 +18,7 @@
  *
  ***/
 
-import { Brand, unsafe_cast } from "type_primitives";
+import { Brand, unsafe_cast } from "./type_primitives";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { TOTAL_PACKED_BITS } from "./utils/constants";
 
@@ -30,10 +30,7 @@ export const MAX_INDEX = INDEX_MASK; // 1,048,575
 export const GENERATION_BITS = TOTAL_PACKED_BITS - INDEX_BITS; // 11
 export const MAX_GENERATION = (1 << GENERATION_BITS) - 1; // 0x7FF (2047)
 
-export const create_entity_id = (
-  index: number,
-  generation: number,
-): EntityID => {
+export const create_entity_id = (index: number, generation: number): EntityID => {
   if (__DEV__) {
     if (index < 0 || index > MAX_INDEX) {
       throw new ECSError(ECS_ERROR.EID_MAX_INDEX_OVERFLOW);
@@ -48,5 +45,4 @@ export const create_entity_id = (
 
 export const get_entity_index = (id: EntityID): number => id & INDEX_MASK;
 
-export const get_entity_generation = (id: EntityID): number =>
-  (id as number) >> INDEX_BITS;
+export const get_entity_generation = (id: EntityID): number => (id as number) >> INDEX_BITS;

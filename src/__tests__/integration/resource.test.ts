@@ -2,235 +2,176 @@ import { describe, expect, it } from "vitest";
 import { ECS } from "../../ecs";
 import { SCHEDULE } from "../../schedule";
 import type { SystemContext } from "../../query";
-import type { Store } from "../../store";
-import { unsafe_cast } from "type_primitives";
+import { resource_key } from "../../resource";
+import { ECS_ERROR, ECSError } from "../../utils/error";
 
 describe("Resource system", () => {
-  it("registration returns unique ResourceDefs", () => {
-    const world = new ECS();
-    const A = world.register_resource(["x"] as const, { x: 0 });
-    const B = world.register_resource(["y"] as const, { y: 0 });
+  // ==== Resource key system ====
 
-    expect((A as unknown as number) !== (B as unknown as number)).toBe(true);
+  it("insert and read a resource by key", () => {
+    const world = new ECS();
+    const TimeRes = resource_key<{ delta: number; elapsed: number }>("Time");
+    world.register_resource(TimeRes, { delta: 0.016, elapsed: 1.5 });
+    const time = world.resource(TimeRes);
+    expect(time.delta).toBe(0.016);
+    expect(time.elapsed).toBe(1.5);
   });
 
-  it("initial values are readable immediately after registration", () => {
+  it("resource returns mutable reference — direct mutation works", () => {
     const world = new ECS();
-    const Time = world.register_resource(["delta", "elapsed"] as const, {
-      delta: 0.016,
-      elapsed: 1.5,
-    });
-
-    const r = world.resource(Time);
-    expect(r.delta).toBe(0.016);
-    expect(r.elapsed).toBe(1.5);
+    const Counter = resource_key<{ value: number }>("Counter");
+    world.register_resource(Counter, { value: 0 });
+    const counter = world.resource(Counter);
+    counter.value = 42;
+    expect(world.resource(Counter).value).toBe(42);
   });
 
-  it("ctx.resource returns typed reader with correct values", () => {
+  it("set_resource replaces the value entirely", () => {
     const world = new ECS();
-    const Config = world.register_resource(["speed", "gravity"] as const, {
-      speed: 100,
-      gravity: 9.8,
-    });
+    const Config = resource_key<{ speed: number }>("Config");
+    world.register_resource(Config, { speed: 10 });
+    world.set_resource(Config, { speed: 99 });
+    expect(world.resource(Config).speed).toBe(99);
+  });
+
+  it("has_resource returns false before insert, true after", () => {
+    const world = new ECS();
+    const Res = resource_key<{ x: number }>("Res");
+    expect(world.has_resource(Res)).toBe(false);
+    world.register_resource(Res, { x: 1 });
+    expect(world.has_resource(Res)).toBe(true);
+  });
+
+  it("duplicate insert throws RESOURCE_ALREADY_REGISTERED", () => {
+    const world = new ECS();
+    const Res = resource_key<{ x: number }>("Res");
+    world.register_resource(Res, { x: 1 });
+    try {
+      world.register_resource(Res, { x: 2 });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.RESOURCE_ALREADY_REGISTERED);
+    }
+  });
+
+  it("resource() on missing key throws RESOURCE_NOT_REGISTERED", () => {
+    const world = new ECS();
+    const Res = resource_key<{ x: number }>("Missing");
+    try {
+      world.resource(Res);
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.RESOURCE_NOT_REGISTERED);
+    }
+  });
+
+  it("set_resource on missing key throws RESOURCE_NOT_REGISTERED", () => {
+    const world = new ECS();
+    const Res = resource_key<{ x: number }>("Missing");
+    try {
+      world.set_resource(Res, { x: 1 });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.RESOURCE_NOT_REGISTERED);
+    }
+  });
+
+  it("multiple key resources are independent", () => {
+    const world = new ECS();
+    const A = resource_key<{ val: number }>("A");
+    const B = resource_key<{ val: number }>("B");
+    world.register_resource(A, { val: 10 });
+    world.register_resource(B, { val: 20 });
+    world.resource(A).val = 99;
+    expect(world.resource(B).val).toBe(20);
+  });
+
+  it("stores non-numeric values (objects, class instances)", () => {
+    const world = new ECS();
+    class Renderer {
+      public count = 0;
+      update() {
+        this.count++;
+      }
+    }
+    const RendererRes = resource_key<Renderer>("Renderer");
+    const instance = new Renderer();
+    world.register_resource(RendererRes, instance);
+    const r = world.resource(RendererRes);
+    r.update();
+    r.update();
+    expect(r.count).toBe(2);
+    expect(r).toBe(instance);
+  });
+
+  it("ctx.resource reads key-based resources within systems", () => {
+    const world = new ECS();
+    const Config = resource_key<{ speed: number }>("Config");
+    world.register_resource(Config, { speed: 42 });
     let read_speed = -1;
-    let read_gravity = -1;
-
     const sys = world.register_system({
       fn(ctx: SystemContext) {
-        const cfg = ctx.resource(Config);
-        read_speed = cfg.speed;
-        read_gravity = cfg.gravity;
+        read_speed = ctx.resource(Config).speed;
       },
     });
-
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
-
-    expect(read_speed).toBe(100);
-    expect(read_gravity).toBe(9.8);
+    expect(read_speed).toBe(42);
   });
 
-  it("ctx.set_resource updates values and reader reflects changes", () => {
+  it("ctx.set_resource replaces key-based resources within systems", () => {
     const world = new ECS();
-    const Time = world.register_resource(["delta", "elapsed"] as const, {
-      delta: 0,
-      elapsed: 0,
-    });
-    let read_delta = -1;
-    let read_elapsed = -1;
-
-    const writer = world.register_system({
-      fn(ctx: SystemContext) {
-        ctx.set_resource(Time, { delta: 0.016, elapsed: 1.0 });
-      },
-    });
-    const reader = world.register_system({
-      fn(ctx: SystemContext) {
-        const t = ctx.resource(Time);
-        read_delta = t.delta;
-        read_elapsed = t.elapsed;
-      },
-    });
-
-    world.add_systems(SCHEDULE.UPDATE, writer, {
-      system: reader,
-      ordering: { after: [writer] },
-    });
-    world.startup();
-    world.update(0);
-
-    expect(read_delta).toBe(0.016);
-    expect(read_elapsed).toBe(1.0);
-  });
-
-  it("ctx.resource() reads individual fields via the reader", () => {
-    const world = new ECS();
-    const Camera = world.register_resource(["x", "y", "zoom"] as const, {
-      x: 10,
-      y: 20,
-      zoom: 2,
-    });
-    let read_zoom = -1;
-
+    const State = resource_key<{ phase: number }>("State");
+    world.register_resource(State, { phase: 0 });
     const sys = world.register_system({
       fn(ctx: SystemContext) {
-        read_zoom = ctx.resource(Camera).zoom;
+        ctx.set_resource(State, { phase: 3 });
       },
     });
-
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
-
-    expect(read_zoom).toBe(2);
+    expect(world.resource(State).phase).toBe(3);
   });
 
-  it("ctx.set_resource() updates individual fields", () => {
+  it("direct mutation within system persists across frames", () => {
     const world = new ECS();
-    const Camera = world.register_resource(["x", "y", "zoom"] as const, {
-      x: 10,
-      y: 20,
-      zoom: 2,
-    });
-    let read_x = -1;
-    let read_y = -1;
-    let read_zoom = -1;
-
-    const writer = world.register_system({
-      fn(ctx: SystemContext) {
-        ctx.set_resource(Camera, { x: 10, y: 20, zoom: 4 });
-      },
-    });
-    const reader = world.register_system({
-      fn(ctx: SystemContext) {
-        const cam = ctx.resource(Camera);
-        read_x = cam.x;
-        read_y = cam.y;
-        read_zoom = cam.zoom;
-      },
-    });
-
-    world.add_systems(SCHEDULE.UPDATE, writer, {
-      system: reader,
-      ordering: { after: [writer] },
-    });
-    world.startup();
-    world.update(0);
-
-    expect(read_x).toBe(10);
-    expect(read_y).toBe(20);
-    expect(read_zoom).toBe(4);
-  });
-
-  it("multiple resources are independent", () => {
-    const world = new ECS();
-    const Time = world.register_resource(["delta"] as const, { delta: 0.016 });
-    const Score = world.register_resource(["points"] as const, { points: 100 });
-
-    world.set_resource(Score, { points: 200 });
-
-    expect(world.resource(Time).delta).toBe(0.016);
-    expect(world.resource(Score).points).toBe(200);
-  });
-
-  it("reader is a live view — reads always return current values", () => {
-    const world = new ECS();
-    const Counter = world.register_resource(["value"] as const, { value: 0 });
-
-    const reader = world.resource(Counter);
-    expect(reader.value).toBe(0);
-
-    world.set_resource(Counter, { value: 42 });
-    expect(reader.value).toBe(42);
-
-    world.set_resource(Counter, { value: 99 });
-    expect(reader.value).toBe(99);
-  });
-
-  it("set_resource applies immediately (not deferred)", () => {
-    const world = new ECS();
-    const State = world.register_resource(["phase"] as const, { phase: 0 });
-    const phases: number[] = [];
-
+    const Counter = resource_key<{ value: number }>("Counter");
+    world.register_resource(Counter, { value: 0 });
     const sys = world.register_system({
       fn(ctx: SystemContext) {
-        ctx.set_resource(State, { phase: 1 });
-        phases.push(ctx.resource(State).phase);
-        ctx.set_resource(State, { phase: 2 });
-        phases.push(ctx.resource(State).phase);
+        ctx.resource(Counter).value++;
       },
     });
-
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
-
-    expect(phases).toEqual([1, 2]);
+    world.update(0);
+    world.update(0);
+    expect(world.resource(Counter).value).toBe(3);
   });
 
-  it("partial set_resource only updates specified fields", () => {
+  it("ctx.has_resource returns correct values within systems", () => {
     const world = new ECS();
-    const Vec = world.register_resource(["x", "y", "z"] as const, {
-      x: 1,
-      y: 2,
-      z: 3,
-    });
-
-    const world_ecs = unsafe_cast<{ store: Store }>(world);
-    const channel = world_ecs.store.get_resource_channel(Vec);
-    channel.write({ x: 10 });
-
-    const r = world.resource(Vec);
-    expect(r.x).toBe(10);
-    expect(r.y).toBe(2);
-    expect(r.z).toBe(3);
-  });
-
-  it("resource values persist across frames", () => {
-    const world = new ECS();
-    const Counter = world.register_resource(["value"] as const, { value: 0 });
-    let frame = 0;
-    let read_value = -1;
-
+    const Inserted = resource_key<{ x: number }>("Inserted");
+    const NotInserted = resource_key<{ x: number }>("NotInserted");
+    world.register_resource(Inserted, { x: 1 });
+    let has_inserted = false;
+    let has_not_inserted = true;
     const sys = world.register_system({
       fn(ctx: SystemContext) {
-        if (frame === 0) {
-          ctx.set_resource(Counter, { value: 42 });
-        }
-        read_value = ctx.resource(Counter).value;
+        has_inserted = ctx.has_resource(Inserted);
+        has_not_inserted = ctx.has_resource(NotInserted);
       },
     });
-
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
-
-    frame = 0;
     world.update(0);
-    expect(read_value).toBe(42);
-
-    frame = 1;
-    world.update(0);
-    expect(read_value).toBe(42);
+    expect(has_inserted).toBe(true);
+    expect(has_not_inserted).toBe(false);
   });
 });

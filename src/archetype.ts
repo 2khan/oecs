@@ -28,17 +28,19 @@ import {
   TypedArrayFor,
   type AnyTypedArray,
   type TypedArrayTag,
-} from "type_primitives";
+} from "./type_primitives";
 import type {
   ComponentID,
   ComponentDef,
   ComponentSchema,
   TagToTypedArray,
+  ReadonlyColumn,
+  ReadonlyUint32Array,
 } from "./component";
 import { get_entity_index, type EntityID } from "./entity";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { NO_SWAP, DEFAULT_COLUMN_CAPACITY } from "./utils/constants";
-import type { BitSet } from "type_primitives";
+import type { BitSet } from "./type_primitives";
 
 export type ArchetypeID = Brand<number, "archetype_id">;
 
@@ -71,9 +73,9 @@ interface ArchetypeColumnGroup {
 }
 
 export class Archetype {
-  readonly id: ArchetypeID;
-  readonly mask: BitSet;
-  readonly has_columns: boolean;
+  public readonly id: ArchetypeID;
+  public readonly mask: BitSet;
+  public readonly has_columns: boolean;
 
   private readonly _entity_ids: GrowableUint32Array;
   public length: number = 0;
@@ -81,20 +83,22 @@ export class Archetype {
 
   // --- Flat column storage ---
   // Dense array of ALL columns across all components in this archetype.
-  readonly _flat_columns: GrowableTypedArray<AnyTypedArray>[] = [];
+  public readonly _flat_columns: GrowableTypedArray<AnyTypedArray>[] = [];
   // Sparse by ComponentID → starting index into _flat_columns.
-  readonly _col_offset: number[] = [];
+  public readonly _col_offset: number[] = [];
   // Sparse by ComponentID → number of fields for that component.
-  readonly _field_count: number[] = [];
+  public readonly _field_count: number[] = [];
   // Sparse by ComponentID → field_index record (field name → offset within component).
   private readonly _field_index: Record<string, number>[] = [];
   // Sparse by ComponentID → field_names array.
   private readonly _field_names: string[][] = [];
 
   // Sparse array indexed by ComponentID — kept for create_ref compatibility.
-  readonly column_groups: (ArchetypeColumnGroup | undefined)[] = [];
+  public readonly column_groups: (ArchetypeColumnGroup | undefined)[] = [];
   // Dense list of ComponentIDs that have columns — used for copy_shared_from.
-  readonly _column_ids: number[] = [];
+  public readonly _column_ids: number[] = [];
+  // Sparse by ComponentID → last tick that modified this component's columns.
+  public readonly _changed_tick: number[] = [];
 
   constructor(
     id: ArchetypeID,
@@ -119,13 +123,14 @@ export class Archetype {
         this._field_names[cid] = layout.field_names;
 
         for (let j = 0; j < layout.field_names.length; j++) {
-          const col = new (TypedArrayFor[layout.field_types[j]])(initial_capacity);
+          const col = new TypedArrayFor[layout.field_types[j]](initial_capacity);
           columns[j] = col;
           this._flat_columns[flat_idx++] = col;
         }
 
         this.column_groups[cid] = { layout, columns };
         this._column_ids.push(cid);
+        this._changed_tick[cid] = 0;
       }
     }
 
@@ -137,7 +142,7 @@ export class Archetype {
   }
 
   /** Raw entity ID buffer. Valid data at indices 0..entity_count-1. */
-  public get entity_ids(): Uint32Array {
+  public get entity_ids(): ReadonlyUint32Array {
     return this._entity_ids.buf;
   }
 
@@ -153,11 +158,11 @@ export class Archetype {
     return this.mask.contains(required);
   }
 
-  /** Get a single field's column. Valid data: indices 0..entity_count-1. */
+  /** Get a single field's column (read-only). Valid data: indices 0..entity_count-1. */
   public get_column<S extends ComponentSchema, K extends string & keyof S>(
     def: ComponentDef<S>,
     field: K,
-  ): TagToTypedArray[S[K]] {
+  ): ReadonlyColumn {
     const cid = def as unknown as number;
     if (__DEV__) {
       if (this._col_offset[cid] === undefined) {
@@ -176,6 +181,34 @@ export class Archetype {
         );
       }
     }
+    return this._flat_columns[this._col_offset[cid] + fi].buf as unknown as ReadonlyColumn;
+  }
+
+  /** Get a single field's column (mutable). Marks the component as changed at the given tick. */
+  public get_column_mut<S extends ComponentSchema, K extends string & keyof S>(
+    def: ComponentDef<S>,
+    field: K,
+    tick: number,
+  ): TagToTypedArray[S[K]] {
+    const cid = def as unknown as number;
+    if (__DEV__) {
+      if (this._col_offset[cid] === undefined) {
+        throw new ECSError(
+          ECS_ERROR.COMPONENT_NOT_REGISTERED,
+          `Component ${def} not in archetype ${this.id}`,
+        );
+      }
+    }
+    this._changed_tick[cid] = tick;
+    const fi = this._field_index[cid][field];
+    if (__DEV__) {
+      if (fi === undefined) {
+        throw new ECSError(
+          ECS_ERROR.COMPONENT_NOT_REGISTERED,
+          `Field "${field}" does not exist on component`,
+        );
+      }
+    }
     return this._flat_columns[this._col_offset[cid] + fi].buf as TagToTypedArray[S[K]];
   }
 
@@ -183,10 +216,12 @@ export class Archetype {
     row: number,
     component_id: ComponentID,
     values: Record<string, number>,
+    tick: number,
   ): void {
     const cid = component_id as number;
     const offset = this._col_offset[cid];
     if (offset === undefined) return;
+    this._changed_tick[cid] = tick;
     const names = this._field_names[cid];
     const cols = this._flat_columns;
     for (let i = 0; i < names.length; i++) {
@@ -199,21 +234,19 @@ export class Archetype {
     row: number,
     component_id: ComponentID,
     values: ArrayLike<number>,
+    tick: number,
   ): void {
     const cid = component_id as number;
     const offset = this._col_offset[cid];
     if (offset === undefined) return;
+    this._changed_tick[cid] = tick;
     const cols = this._flat_columns;
     for (let i = 0; i < values.length; i++) {
       cols[offset + i].buf[row] = values[i];
     }
   }
 
-  public read_field(
-    row: number,
-    component_id: ComponentID,
-    field: string,
-  ): number {
+  public read_field(row: number, component_id: ComponentID, field: string): number {
     const cid = component_id as number;
     const offset = this._col_offset[cid];
     if (offset === undefined) return NaN;
@@ -223,11 +256,7 @@ export class Archetype {
   }
 
   /** Copy all shared component columns from source archetype at src_row into dst_row. */
-  public copy_shared_from(
-    source: Archetype,
-    src_row: number,
-    dst_row: number,
-  ): void {
+  public copy_shared_from(source: Archetype, src_row: number, dst_row: number, tick: number): void {
     const src_offsets = source._col_offset;
     const src_fcounts = source._field_count;
     const src_cols = source._flat_columns;
@@ -237,6 +266,7 @@ export class Archetype {
       const cid = ids[i];
       const src_off = src_offsets[cid];
       if (src_off === undefined) continue;
+      this._changed_tick[cid] = tick;
       const dst_off = this._col_offset[cid];
       const fc = src_fcounts[cid];
       for (let j = 0; j < fc; j++) {
@@ -323,6 +353,7 @@ export class Archetype {
     src_row: number,
     entity_id: EntityID,
     transition_map: Int16Array,
+    tick: number,
   ): void {
     const dst_row = this.length;
     this._entity_ids.push(entity_id as number);
@@ -336,12 +367,16 @@ export class Archetype {
       dst_cols[i].push(si >= 0 ? src_cols[si].buf[src_row] : 0);
     }
 
+    // Mark all components in this archetype as changed
+    const ids = this._column_ids;
+    for (let i = 0; i < ids.length; i++) {
+      this._changed_tick[ids[i]] = tick;
+    }
+
     this.length++;
 
     // Swap-remove entity from source
-    const sw = src.has_columns
-      ? src.remove_entity(src_row)
-      : src.remove_entity_tag(src_row);
+    const sw = src.has_columns ? src.remove_entity(src_row) : src.remove_entity_tag(src_row);
 
     _move_result[0] = dst_row;
     _move_result[1] = sw;
@@ -351,11 +386,7 @@ export class Archetype {
    * Move an entity from src into this archetype (tag-only: no columns to copy).
    * Writes dst_row to _move_result[0], swapped entity index to _move_result[1].
    */
-  public move_entity_from_tag(
-    src: Archetype,
-    src_row: number,
-    entity_id: EntityID,
-  ): void {
+  public move_entity_from_tag(src: Archetype, src_row: number, entity_id: EntityID): void {
     const dst_row = this.length;
     this._entity_ids.push(entity_id as number);
     this.length++;
@@ -371,10 +402,7 @@ export class Archetype {
    * Much faster than per-entity move_entity_from when the entire source is moving.
    * After this call, src is empty. Returns the starting dst_row for the batch.
    */
-  public bulk_move_all_from(
-    src: Archetype,
-    transition_map: Int16Array,
-  ): number {
+  public bulk_move_all_from(src: Archetype, transition_map: Int16Array, tick: number): number {
     const count = src.length;
     if (count === 0) return this.length;
 
@@ -393,6 +421,12 @@ export class Archetype {
       } else {
         dst_cols[i].bulk_append_zeroes(count);
       }
+    }
+
+    // Mark all components in this archetype as changed
+    const ids = this._column_ids;
+    for (let i = 0; i < ids.length; i++) {
+      this._changed_tick[ids[i]] = tick;
     }
 
     this.length += count;

@@ -18,7 +18,11 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 10, y: 20 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
@@ -35,7 +39,11 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 1, y: 2 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
@@ -57,12 +65,16 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 0, y: 0 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
 
-    const pos = ctx.ref(Pos, e);
+    const pos = ctx.ref_mut(Pos, e);
     pos.x = 42;
     pos.y = 84;
 
@@ -77,12 +89,16 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 10, y: 20 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
 
-    const pos = ctx.ref(Pos, e);
+    const pos = ctx.ref_mut(Pos, e);
     pos.x += 5;
     pos.y *= 2;
 
@@ -103,12 +119,16 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Vel, { vx: 10, vy: 20 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
 
-    const pos = ctx.ref(Pos, e);
+    const pos = ctx.ref_mut(Pos, e);
     const vel = ctx.ref(Vel, e);
 
     pos.x += vel.vx;
@@ -129,12 +149,16 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e2, Pos, { x: 100, y: 200 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
 
-    const p1 = ctx.ref(Pos, e1);
+    const p1 = ctx.ref_mut(Pos, e1);
     const p2 = ctx.ref(Pos, e2);
 
     p1.x = 999;
@@ -156,7 +180,11 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e2, Pos, { x: 0, y: 0 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
@@ -179,7 +207,11 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 0, y: 0 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);
@@ -211,7 +243,7 @@ describe("ComponentRef (ctx.ref)", () => {
     const sys = world.register_system({
       fn(ctx) {
         // Create ref while entity is in archetype [Pos]
-        const pos = ctx.ref(Pos, e);
+        const pos = ctx.ref_mut(Pos, e);
         expect(pos.x).toBe(10);
         expect(pos.y).toBe(20);
 
@@ -318,7 +350,7 @@ describe("ComponentRef (ctx.ref)", () => {
 
     const sys = world.register_system({
       fn(ctx) {
-        const pos = ctx.ref(Pos, e);
+        const pos = ctx.ref_mut(Pos, e);
         const vel = ctx.ref(Vel, e);
 
         // Defer adding a third component
@@ -337,12 +369,12 @@ describe("ComponentRef (ctx.ref)", () => {
     world.startup();
     world.update(0);
 
-    expect(pos_x).toBe(4);  // 1 + 3
+    expect(pos_x).toBe(4); // 1 + 3
     expect(vel_vx).toBe(3);
 
     // After flush, values carried over to new archetype [Pos, Vel, Health]
     expect(world.get_field(e, Pos, "x")).toBe(4);
-    expect(world.get_field(e, Pos, "y")).toBe(6);  // 2 + 4
+    expect(world.get_field(e, Pos, "y")).toBe(6); // 2 + 4
     expect(world.get_field(e, Health, "hp")).toBe(100);
   });
 
@@ -357,7 +389,11 @@ describe("ComponentRef (ctx.ref)", () => {
     world.add_component(e, Pos, { x: 5, y: 10 });
 
     let ctx!: SystemContext;
-    const sys = world.register_system({ fn(_ctx) { ctx = _ctx; } });
+    const sys = world.register_system({
+      fn(_ctx) {
+        ctx = _ctx;
+      },
+    });
     world.add_systems(SCHEDULE.UPDATE, sys);
     world.startup();
     world.update(0);

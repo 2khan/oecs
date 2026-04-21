@@ -10,10 +10,21 @@
 
 import { TYPE_ERROR, TypeError } from "./error";
 
-export const is_non_negative_integer = (v: number): boolean =>
-  Number.isInteger(v) && v >= 0;
+export const is_non_negative_integer = (v: number): boolean => Number.isInteger(v) && v >= 0;
 
 export const is_non_null = (v: unknown): boolean => v !== null;
+
+export function assert_non_null<T>(value: T): asserts value is NonNullable<T> {
+  //
+  // Checks if value is not null or undefined
+  // value == null is true for both value == null and value == undefined
+  //
+  if (__DEV__ && value == null)
+    throw new TypeError(
+      TYPE_ERROR.ASSERTION_FAIL_NON_NULLABLE,
+      "Expected type to be not NULL or UNDEFINED",
+    );
+}
 
 export function assert<T, Result extends T = T>(
   value: T,

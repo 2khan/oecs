@@ -13,13 +13,13 @@ describe("Column scale", () => {
       world.add_component(e, Pos, { x: i, y: i * 3 });
     }
 
-    for (const arch of world.query(Pos)) {
+    world.query(Pos).for_each((arch) => {
       const cx = arch.get_column(Pos, "x");
       const cy = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(cy[i]).toBe(cx[i] * 3);
       }
-    }
+    });
   });
 
   it("5,000 entities with 3-field component, delete 2,500, verify remaining columns", () => {
@@ -106,9 +106,8 @@ describe("Column scale", () => {
 
     // Get the archetype containing [Pos] only (not Vel)
     const pos_only_query = world.query(Pos).not(Vel);
-    const pos_archs = [...pos_only_query];
-    expect(pos_archs.length).toBe(1);
-    const src_arch = pos_archs[0];
+    expect(pos_only_query.archetype_count).toBe(1);
+    const src_arch = pos_only_query.archetypes[0];
     expect(src_arch.entity_count).toBe(1_000);
 
     // Batch add Velocity to all entities in that archetype

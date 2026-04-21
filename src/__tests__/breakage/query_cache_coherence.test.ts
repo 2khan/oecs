@@ -25,13 +25,13 @@ describe("Query cache coherence edge cases", () => {
 
     // Verify we can iterate and read data
     let total = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       total += arch.entity_count;
       const px = arch.get_column(Pos, "x");
       for (let i = 0; i < arch.entity_count; i++) {
         expect(typeof px[i]).toBe("number");
       }
-    }
+    });
     expect(total).toBe(2);
   });
 
@@ -54,28 +54,28 @@ describe("Query cache coherence edge cases", () => {
     world.destroy_entity_deferred(e2);
     world.flush();
 
-    // for..of should skip empty archetypes
+    // for_each should skip empty archetypes
     let countAfterDestroy = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       countAfterDestroy += arch.entity_count;
-    }
+    });
     expect(countAfterDestroy).toBe(0);
 
     // Phase 3: add new entities to the same archetype shape
     const e3 = world.create_entity();
     world.add_component(e3, Pos, { x: 10, y: 20 });
 
-    // for..of should now yield exactly the new entity
+    // for_each should now yield exactly the new entity
     let countAfterReadd = 0;
     const readValues: number[] = [];
-    for (const arch of q) {
+    q.for_each((arch) => {
       countAfterReadd += arch.entity_count;
       const px = arch.get_column(Pos, "x");
       const py = arch.get_column(Pos, "y");
       for (let i = 0; i < arch.entity_count; i++) {
         readValues.push(px[i], py[i]);
       }
-    }
+    });
     expect(countAfterReadd).toBe(1);
     expect(readValues).toEqual([10, 20]);
   });
@@ -125,8 +125,8 @@ describe("Query cache coherence edge cases", () => {
     world.add_component(e, Pos, { x: 1, y: 2 });
     world.add_component(e, Vel, { vx: 3, vy: 4 });
 
-    const q1 = world.query(Pos);       // matches [Pos] and [Pos,Vel]
-    const q2 = world.query(Pos, Vel);   // matches only [Pos,Vel]
+    const q1 = world.query(Pos); // matches [Pos] and [Pos,Vel]
+    const q2 = world.query(Pos, Vel); // matches only [Pos,Vel]
 
     // Before: entity is in both queries
     expect(q1.count()).toBe(1);
@@ -172,10 +172,10 @@ describe("Query cache coherence edge cases", () => {
     // Query should yield exactly 1 non-empty archetype with 1 entity
     let archCount = 0;
     let totalEntities = 0;
-    for (const arch of q) {
+    q.for_each((arch) => {
       archCount++;
       totalEntities += arch.entity_count;
-    }
+    });
     expect(archCount).toBe(1);
     expect(totalEntities).toBe(1);
     expect(world.get_field(e2, Pos, "x")).toBe(99);

@@ -15,12 +15,14 @@
  *
  ***/
 
-import {
-  BITS_PER_WORD_SHIFT,
-  BITS_PER_WORD_MASK,
-  FNV_OFFSET_BASIS,
-  FNV_PRIME,
-} from "../../utils/constants";
+// Bit-manipulation constants for 32-bit word operations
+export const BITS_PER_WORD = 32;
+export const BITS_PER_WORD_SHIFT = 5; // log2(32)
+export const BITS_PER_WORD_MASK = 31; // 32 - 1
+
+// FNV-1a hash constants
+export const FNV_OFFSET_BASIS = 0x811c9dc5;
+export const FNV_PRIME = 0x01000193;
 
 const INITIAL_WORD_COUNT = 4; // 128 component IDs before first grow
 

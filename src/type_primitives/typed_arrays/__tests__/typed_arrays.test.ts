@@ -207,16 +207,7 @@ describe("GrowableTypedArray", () => {
 //=========================================================
 
 describe("TypedArrayFor", () => {
-  const tags: TypedArrayTag[] = [
-    "f32",
-    "f64",
-    "i8",
-    "i16",
-    "i32",
-    "u8",
-    "u16",
-    "u32",
-  ];
+  const tags: TypedArrayTag[] = ["f32", "f64", "i8", "i16", "i32", "u8", "u16", "u32"];
 
   for (const tag of tags) {
     it(`TypedArrayFor["${tag}"] constructs and pushes correctly`, () => {

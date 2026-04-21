@@ -25,6 +25,7 @@
  *
  ***/
 
+import { topological_sort } from "./type_primitives";
 import type { SystemContext } from "./query";
 import type { SystemDescriptor } from "./system";
 import { ECS_ERROR, ECSError } from "./utils/error";
@@ -40,17 +41,9 @@ export enum SCHEDULE {
   POST_UPDATE = "POST_UPDATE",
 }
 
-const STARTUP_LABELS = [
-  SCHEDULE.PRE_STARTUP,
-  SCHEDULE.STARTUP,
-  SCHEDULE.POST_STARTUP,
-] as const;
+const STARTUP_LABELS = [SCHEDULE.PRE_STARTUP, SCHEDULE.STARTUP, SCHEDULE.POST_STARTUP] as const;
 
-const UPDATE_LABELS = [
-  SCHEDULE.PRE_UPDATE,
-  SCHEDULE.UPDATE,
-  SCHEDULE.POST_UPDATE,
-] as const;
+const UPDATE_LABELS = [SCHEDULE.PRE_UPDATE, SCHEDULE.UPDATE, SCHEDULE.POST_UPDATE] as const;
 
 export interface SystemOrdering {
   before?: SystemDescriptor[];
@@ -73,6 +66,7 @@ export class Schedule {
   private readonly label_systems: Map<SCHEDULE, SystemNode[]> = new Map();
   private readonly sorted_cache: Map<SCHEDULE, SystemDescriptor[]> = new Map();
   private readonly system_index: Map<SystemDescriptor, SCHEDULE> = new Map();
+  private readonly system_last_run: Map<SystemDescriptor, number> = new Map();
   private next_insertion_order = 0;
 
   constructor() {
@@ -85,10 +79,7 @@ export class Schedule {
     }
   }
 
-  public add_systems(
-    label: SCHEDULE,
-    ...entries: (SystemDescriptor | SystemEntry)[]
-  ): void {
+  public add_systems(label: SCHEDULE, ...entries: (SystemDescriptor | SystemEntry)[]): void {
     for (const entry of entries) {
       const descriptor = "system" in entry ? entry.system : entry;
       const ordering = "system" in entry ? entry.ordering : undefined;
@@ -112,6 +103,7 @@ export class Schedule {
       // ! safe: constructor pre-populates all SCHEDULE enum keys
       this.label_systems.get(label)!.push(node);
       this.system_index.set(descriptor, label);
+      this.system_last_run.set(descriptor, 0);
       this.sorted_cache.delete(label);
     }
   }
@@ -139,23 +131,24 @@ export class Schedule {
     }
 
     this.system_index.delete(system);
+    this.system_last_run.delete(system);
     this.sorted_cache.delete(label);
   }
 
-  public run_startup(ctx: SystemContext): void {
+  public run_startup(ctx: SystemContext, tick: number): void {
     for (const label of STARTUP_LABELS) {
-      this.run_label(label, ctx, STARTUP_DELTA_TIME);
+      this.run_label(label, ctx, STARTUP_DELTA_TIME, tick);
     }
   }
 
-  public run_update(ctx: SystemContext, delta_time: number): void {
+  public run_update(ctx: SystemContext, delta_time: number, tick: number): void {
     for (const label of UPDATE_LABELS) {
-      this.run_label(label, ctx, delta_time);
+      this.run_label(label, ctx, delta_time, tick);
     }
   }
 
-  public run_fixed_update(ctx: SystemContext, fixed_dt: number): void {
-    this.run_label(SCHEDULE.FIXED_UPDATE, ctx, fixed_dt);
+  public run_fixed_update(ctx: SystemContext, fixed_dt: number, tick: number): void {
+    this.run_label(SCHEDULE.FIXED_UPDATE, ctx, fixed_dt, tick);
   }
 
   public has_fixed_systems(): boolean {
@@ -183,15 +176,14 @@ export class Schedule {
     }
     this.sorted_cache.clear();
     this.system_index.clear();
+    this.system_last_run.clear();
   }
 
-  private run_label(
-    label: SCHEDULE,
-    ctx: SystemContext,
-    delta_time: number,
-  ): void {
+  private run_label(label: SCHEDULE, ctx: SystemContext, delta_time: number, tick: number): void {
     const sorted = this.get_sorted(label);
     for (let i = 0; i < sorted.length; i++) {
+      this.system_last_run.set(sorted[i], tick);
+      ctx.last_run_tick = tick;
       sorted[i].fn(ctx, delta_time);
     }
     // Flush deferred changes after each phase so the next phase sees a consistent state
@@ -204,86 +196,67 @@ export class Schedule {
 
     // ! safe: constructor pre-populates all SCHEDULE enum keys
     const nodes = this.label_systems.get(label)!;
-    const sorted = this.topological_sort(nodes, label);
+    const sorted = this.sort_systems(nodes, label);
     this.sorted_cache.set(label, sorted);
     return sorted;
   }
 
   /**
-   * Kahn's algorithm: BFS-based topological sort.
-   * Uses insertion_order as a stable tiebreaker (lower insertion order runs first).
+   * Delegates to the shared topological_sort utility.
+   * Builds the dependency edge map from before/after constraints, then
+   * catches any cycle TypeError and re-throws as ECSError.
    */
-  private topological_sort(
-    nodes: SystemNode[],
-    label: SCHEDULE,
-  ): SystemDescriptor[] {
+  private sort_systems(nodes: SystemNode[], label: SCHEDULE): SystemDescriptor[] {
     if (nodes.length === 0) return [];
 
-    const adjacency = new Map<SystemDescriptor, Set<SystemDescriptor>>();
-    const in_degree = new Map<SystemDescriptor, number>();
+    const descriptors: SystemDescriptor[] = [];
     const insertion_order = new Map<SystemDescriptor, number>();
     const node_set = new Set<SystemDescriptor>();
 
     for (const node of nodes) {
-      adjacency.set(node.descriptor, new Set());
-      in_degree.set(node.descriptor, 0);
+      descriptors.push(node.descriptor);
       insertion_order.set(node.descriptor, node.insertion_order);
       node_set.add(node.descriptor);
     }
 
-    // ! safe in this block: all nodes were inserted into adjacency, in_degree,
-    // and insertion_order maps above, and node_set guards skip unknown descriptors
+    // Build adjacency list: edges.get(a) = list of nodes that must come after a
+    const edges = new Map<SystemDescriptor, SystemDescriptor[]>();
+    for (const node of nodes) {
+      edges.set(node.descriptor, []);
+    }
+
+    // ! safe: all descriptors were inserted into edges above;
+    // node_set guards skip descriptors from other labels
     for (const node of nodes) {
       // "this system runs before X" → edge: this → X
       for (const target of node.before) {
         if (!node_set.has(target)) continue;
-        adjacency.get(node.descriptor)!.add(target);
-        in_degree.set(target, in_degree.get(target)! + 1);
+        edges.get(node.descriptor)!.push(target);
       }
 
       // "this system runs after X" → edge: X → this
       for (const dep of node.after) {
         if (!node_set.has(dep)) continue;
-        adjacency.get(dep)!.add(node.descriptor);
-        in_degree.set(node.descriptor, in_degree.get(node.descriptor)! + 1);
+        edges.get(dep)!.push(node.descriptor);
       }
     }
 
-    // Seed the ready queue with all nodes that have zero in-degree.
-    // Sort descending by insertion_order so pop() yields the lowest (earliest) first.
-    let ready: SystemDescriptor[] = [];
-    for (const node of nodes) {
-      if (in_degree.get(node.descriptor) === 0) ready.push(node.descriptor);
-    }
-    // ! safe in sort/BFS: all descriptors come from the seeded maps above,
-    // and ready.length > 0 guarantees pop() returns a value
-    ready.sort((a, b) => insertion_order.get(b)! - insertion_order.get(a)!);
+    // ! safe: all descriptors were seeded into insertion_order map above
+    const tiebreaker = (a: SystemDescriptor, b: SystemDescriptor) =>
+      insertion_order.get(a)! - insertion_order.get(b)!;
 
-    const result: SystemDescriptor[] = [];
+    const node_name = (d: SystemDescriptor) => d.name ?? `system_${d.id}`;
 
-    while (ready.length > 0) {
-      const current = ready.pop()!;
-      result.push(current);
-      for (const neighbor of adjacency.get(current)!) {
-        const d = in_degree.get(neighbor)! - 1;
-        in_degree.set(neighbor, d);
-        if (d === 0) ready.push(neighbor);
+    try {
+      return topological_sort(descriptors, edges, tiebreaker, node_name);
+    } catch (err) {
+      if (err instanceof TypeError) {
+        throw new ECSError(
+          ECS_ERROR.CIRCULAR_SYSTEM_DEPENDENCY,
+          `Circular system dependency detected in ${label}: ${err.message}`,
+        );
       }
-      ready.sort((a, b) => insertion_order.get(b)! - insertion_order.get(a)!);
+      throw err;
     }
-
-    if (result.length !== nodes.length) {
-      const result_set = new Set(result);
-      const remaining = nodes
-        .filter((n) => !result_set.has(n.descriptor))
-        .map((n) => n.descriptor.name ?? `system_${n.descriptor.id}`);
-
-      throw new ECSError(
-        ECS_ERROR.CIRCULAR_SYSTEM_DEPENDENCY,
-        `Circular system dependency detected in ${label}: [${remaining.join(", ")}]`,
-      );
-    }
-
-    return result;
   }
 }

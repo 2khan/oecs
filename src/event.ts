@@ -12,24 +12,23 @@
  * Signals are zero-field events — they carry no payload, just a count
  * of how many times they were emitted.
  *
- * Usage:
+ * Events are identified by module-scope EventKey symbols, analogous
+ * to ResourceKey. Register once, import the key anywhere:
  *
- *   const Damage = world.register_event(["target", "amount"] as const);
- *   ctx.emit(Damage, { target: entityId, amount: 50 });
+ *   // definition (module scope)
+ *   export const DamageEvent = event_key<readonly ["target", "amount"]>("Damage");
  *
- *   const dmg = ctx.read(Damage);
- *   for (let i = 0; i < dmg.length; i++) {
- *     const target = dmg.target[i];
- *     const amount = dmg.amount[i];
- *   }
+ *   // registration (plugin/setup)
+ *   world.register_event(DamageEvent, ["target", "amount"] as const);
+ *
+ *   // usage (system)
+ *   ctx.emit(DamageEvent, { target: entityId, amount: 50 });
+ *   const dmg = ctx.read(DamageEvent);
+ *   for (let i = 0; i < dmg.length; i++) { ... }
  *
  ***/
 
-import {
-  Brand,
-  validate_and_cast,
-  is_non_negative_integer,
-} from "type_primitives";
+import { Brand, validate_and_cast, is_non_negative_integer, unsafe_cast } from "./type_primitives";
 import type { ComponentFields, ColumnsForFields } from "./component";
 
 export type EventID = Brand<number, "event_id">;
@@ -95,4 +94,22 @@ export class EventChannel {
       cols[i].length = 0;
     }
   }
+}
+
+// =======================================================
+// Event keys — module-scope symbol handles for events
+// =======================================================
+
+declare const __event_key_schema: unique symbol;
+
+export type EventKey<F extends ComponentFields = ComponentFields> = symbol & {
+  readonly [__event_key_schema]: F;
+};
+
+export function event_key<F extends readonly string[]>(name: string): EventKey<F> {
+  return unsafe_cast<EventKey<F>>(Symbol(name));
+}
+
+export function signal_key(name: string): EventKey<readonly []> {
+  return unsafe_cast<EventKey<readonly []>>(Symbol(name));
 }

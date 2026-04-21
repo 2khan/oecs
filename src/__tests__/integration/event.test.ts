@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 import { ECS } from "../../ecs";
 import { SCHEDULE } from "../../schedule";
 import type { SystemContext } from "../../query";
+import { event_key, signal_key } from "../../event";
+import { ECS_ERROR, ECSError } from "../../utils/error";
 
 describe("Event system", () => {
+  // ==== Event key registration and emit/read ====
+
   it("emit in one system, read in a later system within the same update", () => {
     const world = new ECS();
-    const Damage = world.register_event(["target", "amount"] as const);
+    const Damage = event_key<readonly ["target", "amount"]>("Damage");
+    world.register_event(Damage, ["target", "amount"] as const);
     const received: { target: number; amount: number }[] = [];
 
     const emitter = world.register_system({
@@ -35,7 +40,8 @@ describe("Event system", () => {
 
   it("events are cleared between frames", () => {
     const world = new ECS();
-    const Hit = world.register_event(["damage"] as const);
+    const Hit = event_key<readonly ["damage"]>("Hit");
+    world.register_event(Hit, ["damage"] as const);
 
     let read_length = -1;
     let frame = 0;
@@ -62,7 +68,8 @@ describe("Event system", () => {
 
   it("signal (zero-field) events work", () => {
     const world = new ECS();
-    const GameOver = world.register_signal();
+    const GameOver = signal_key("GameOver");
+    world.register_signal(GameOver);
     let fired = false;
 
     const emitter = world.register_system({
@@ -90,7 +97,8 @@ describe("Event system", () => {
 
   it("multiple emits accumulate within a frame", () => {
     const world = new ECS();
-    const Score = world.register_event(["points"] as const);
+    const Score = event_key<readonly ["points"]>("Score");
+    world.register_event(Score, ["points"] as const);
     const totals: number[] = [];
 
     const emitter = world.register_system({
@@ -121,7 +129,8 @@ describe("Event system", () => {
 
   it("startup events are readable in POST_STARTUP", () => {
     const world = new ECS();
-    const Ready = world.register_signal();
+    const Ready = signal_key("Ready");
+    world.register_signal(Ready);
     let read_count = 0;
 
     const emitter = world.register_system({
@@ -145,7 +154,8 @@ describe("Event system", () => {
 
   it("reading an event with no emits returns length 0", () => {
     const world = new ECS();
-    const Nothing = world.register_event(["value"] as const);
+    const Nothing = event_key<readonly ["value"]>("Nothing");
+    world.register_event(Nothing, ["value"] as const);
     let read_length = -1;
 
     const reader = world.register_system({
@@ -163,7 +173,8 @@ describe("Event system", () => {
 
   it("multiple signal emits accumulate", () => {
     const world = new ECS();
-    const Tick = world.register_signal();
+    const Tick = signal_key("Tick");
+    world.register_signal(Tick);
     let count = 0;
 
     const emitter = world.register_system({
@@ -191,7 +202,8 @@ describe("Event system", () => {
 
   it("events emitted in PRE_UPDATE are readable in UPDATE and POST_UPDATE", () => {
     const world = new ECS();
-    const Input = world.register_event(["key"] as const);
+    const Input = event_key<readonly ["key"]>("Input");
+    world.register_event(Input, ["key"] as const);
     let update_len = 0;
     let post_update_len = 0;
 
@@ -219,5 +231,69 @@ describe("Event system", () => {
 
     expect(update_len).toBe(1);
     expect(post_update_len).toBe(1);
+  });
+
+  // ==== Error handling ====
+
+  it("duplicate register_event throws EVENT_ALREADY_REGISTERED", () => {
+    const world = new ECS();
+    const Ev = event_key<readonly ["x"]>("Ev");
+    world.register_event(Ev, ["x"] as const);
+
+    try {
+      world.register_event(Ev, ["x"] as const);
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.EVENT_ALREADY_REGISTERED);
+    }
+  });
+
+  it("emit on unregistered key throws EVENT_NOT_REGISTERED", () => {
+    const world = new ECS();
+    const Ev = event_key<readonly ["x"]>("Unregistered");
+
+    try {
+      world.emit(Ev, { x: 1 });
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.EVENT_NOT_REGISTERED);
+    }
+  });
+
+  it("read on unregistered key throws EVENT_NOT_REGISTERED", () => {
+    const world = new ECS();
+    const Ev = event_key<readonly ["x"]>("Unregistered");
+
+    try {
+      world.read(Ev);
+      expect.fail("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ECSError);
+      expect((e as ECSError).category).toBe(ECS_ERROR.EVENT_NOT_REGISTERED);
+    }
+  });
+
+  // ==== ECS.read and ECS.emit (facade-level) ====
+
+  it("ECS.read works for reading events outside systems", () => {
+    const world = new ECS();
+    const Score = event_key<readonly ["points"]>("Score");
+    world.register_event(Score, ["points"] as const);
+
+    world.emit(Score, { points: 42 });
+    const reader = world.read(Score);
+    expect(reader.length).toBe(1);
+    expect(reader.points[0]).toBe(42);
+  });
+
+  it("ECS.emit signal works at facade level", () => {
+    const world = new ECS();
+    const Ping = signal_key("Ping");
+    world.register_signal(Ping);
+
+    world.emit(Ping);
+    expect(world.read(Ping).length).toBe(1);
   });
 });

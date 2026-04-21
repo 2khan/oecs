@@ -40,19 +40,14 @@ import {
   type ComponentFields,
   type FieldValues,
 } from "./component";
+import { EventChannel, as_event_id, type EventDef, type EventReader } from "./event";
 import {
-  EventChannel,
-  as_event_id,
-  type EventDef,
-  type EventReader,
-} from "./event";
-import {
-  ResourceChannel,
-  as_resource_id,
-  type ResourceDef,
-  type ResourceReader,
-} from "./resource";
-import { unsafe_cast, BitSet, type TypedArrayTag } from "type_primitives";
+  unsafe_cast,
+  BitSet,
+  BITS_PER_WORD_SHIFT,
+  BITS_PER_WORD_MASK,
+  type TypedArrayTag,
+} from "./type_primitives";
 import {
   Archetype,
   as_archetype_id,
@@ -62,14 +57,13 @@ import {
   type ArchetypeEdge,
   type ArchetypeID,
 } from "./archetype";
+import type { Query } from "./query";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { bucket_push } from "./utils/arrays";
 import {
   UNASSIGNED,
   NO_SWAP,
   EMPTY_VALUES,
-  BITS_PER_WORD_SHIFT,
-  BITS_PER_WORD_MASK,
   INITIAL_GENERATION,
   DEFAULT_COLUMN_CAPACITY,
 } from "./utils/constants";
@@ -100,11 +94,6 @@ export class Store {
   private readonly event_channels: EventChannel[] = [];
   private event_count = 0;
 
-  // --- Resource channels ---
-  // Parallel array indexed by ResourceID: each channel holds a single row of SoA columns.
-  private readonly resource_channels: ResourceChannel[] = [];
-  private resource_count = 0;
-
   // --- Archetype management ---
   private readonly archetypes: Archetype[] = [];
   // Hash-bucketed lookup: BitSet.hash() → ArchetypeID[] for deduplication
@@ -112,8 +101,7 @@ export class Store {
   private next_archetype_id = 0;
   // Inverted index: ComponentID → set of ArchetypeIDs containing that component.
   // Used by get_matching_archetypes to start from the smallest set.
-  private readonly component_index: Map<ComponentID, Set<ArchetypeID>> =
-    new Map();
+  private readonly component_index: Map<ComponentID, Set<ArchetypeID>> = new Map();
   // Registered queries: the Store pushes newly-created archetypes into matching
   // query result arrays, so queries are always up-to-date.
   private readonly registered_queries: {
@@ -121,6 +109,7 @@ export class Store {
     exclude_mask: BitSet | null;
     any_of_mask: BitSet | null;
     result: Archetype[];
+    query: Query<any> | null;
   }[] = [];
   private empty_archetype_id: ArchetypeID;
 
@@ -139,6 +128,8 @@ export class Store {
   private readonly pending_remove_ids: EntityID[] = [];
   private readonly pending_remove_defs: ComponentDef[] = [];
 
+  public _tick: number = 0;
+
   private readonly initial_capacity: number;
 
   constructor(initial_capacity?: number) {
@@ -153,10 +144,7 @@ export class Store {
   private arch_get(id: ArchetypeID): Archetype {
     if (__DEV__) {
       if (id < 0 || id >= this.archetypes.length) {
-        throw new ECSError(
-          ECS_ERROR.ARCHETYPE_NOT_FOUND,
-          `Archetype with ID ${id} not found`,
-        );
+        throw new ECSError(ECS_ERROR.ARCHETYPE_NOT_FOUND, `Archetype with ID ${id} not found`);
       }
     }
     return this.archetypes[id];
@@ -221,6 +209,7 @@ export class Store {
         (!rq.any_of_mask || archetype.mask.overlaps(rq.any_of_mask))
       ) {
         rq.result.push(archetype);
+        rq.query?.mark_non_empty_dirty();
       }
     }
 
@@ -228,10 +217,7 @@ export class Store {
   }
 
   /** Resolve "add component_id to archetype_id" → target ArchetypeID. Caches the edge. */
-  private arch_resolve_add(
-    archetype_id: ArchetypeID,
-    component_id: ComponentID,
-  ): ArchetypeID {
+  private arch_resolve_add(archetype_id: ArchetypeID, component_id: ComponentID): ArchetypeID {
     const current = this.arch_get(archetype_id);
     if (current.mask.has(component_id as number)) return archetype_id;
     const edge = current.get_edge(component_id);
@@ -244,10 +230,7 @@ export class Store {
   }
 
   /** Resolve "remove component_id from archetype_id" → target ArchetypeID. Caches the edge. */
-  private arch_resolve_remove(
-    archetype_id: ArchetypeID,
-    component_id: ComponentID,
-  ): ArchetypeID {
+  private arch_resolve_remove(archetype_id: ArchetypeID, component_id: ComponentID): ArchetypeID {
     const current = this.arch_get(archetype_id);
     if (!current.mask.has(component_id as number)) return archetype_id;
     const edge = current.get_edge(component_id);
@@ -260,11 +243,7 @@ export class Store {
   }
 
   /** Cache a bidirectional add/remove edge between two archetypes. */
-  private arch_cache_edge(
-    from: Archetype,
-    to: Archetype,
-    component_id: ComponentID,
-  ): void {
+  private arch_cache_edge(from: Archetype, to: Archetype, component_id: ComponentID): void {
     // from + component_id → to (add edge)
     const from_edge: ArchetypeEdge = from.get_edge(component_id) ?? {
       add: null,
@@ -338,8 +317,7 @@ export class Store {
 
     // Bump generation so stale IDs referencing this slot are detected as dead
     const generation = get_entity_generation(id);
-    if (__DEV__ && generation >= MAX_GENERATION)
-      throw new ECSError(ECS_ERROR.EID_MAX_GEN_OVERFLOW);
+    if (__DEV__ && generation >= MAX_GENERATION) throw new ECSError(ECS_ERROR.EID_MAX_GEN_OVERFLOW);
     this.entity_generations[index] = (generation + 1) & MAX_GENERATION;
     this.entity_free_indices.push(index);
     this.entity_alive_count--;
@@ -348,8 +326,7 @@ export class Store {
   public is_alive(id: EntityID): boolean {
     const index = get_entity_index(id);
     return (
-      index < this.entity_high_water &&
-      this.entity_generations[index] === get_entity_generation(id)
+      index < this.entity_high_water && this.entity_generations[index] === get_entity_generation(id)
     );
   }
 
@@ -357,13 +334,19 @@ export class Store {
     return this.entity_alive_count;
   }
 
+  private _mark_queries_dirty(): void {
+    const rqs = this.registered_queries;
+    for (let i = 0; i < rqs.length; i++) {
+      rqs[i].query?.mark_non_empty_dirty();
+    }
+  }
+
   // =======================================================
   // Deferred destruction
   // =======================================================
 
   public destroy_entity_deferred(id: EntityID): void {
-    if (__DEV__ && !this.is_alive(id))
-      throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    if (__DEV__ && !this.is_alive(id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_destroy.push(id);
   }
 
@@ -391,22 +374,20 @@ export class Store {
       if (row !== UNASSIGNED) {
         const arch = archs[ent_arch[idx] as ArchetypeID];
         // Tag-only archetypes skip column operations entirely
-        const sw = arch.has_columns
-          ? arch.remove_entity(row)
-          : arch.remove_entity_tag(row);
+        const sw = arch.has_columns ? arch.remove_entity(row) : arch.remove_entity_tag(row);
         if (sw !== NO_SWAP) ent_row[sw] = row;
       }
 
       ent_arch[idx] = UNASSIGNED;
       ent_row[idx] = UNASSIGNED;
-      if (__DEV__ && gen >= MAX_GENERATION)
-        throw new ECSError(ECS_ERROR.EID_MAX_GEN_OVERFLOW);
+      if (__DEV__ && gen >= MAX_GENERATION) throw new ECSError(ECS_ERROR.EID_MAX_GEN_OVERFLOW);
       ent_gens[idx] = (gen + 1) & MAX_GENERATION;
       this.entity_free_indices.push(idx);
       this.entity_alive_count--;
     }
 
     buf.length = 0;
+    this._mark_queries_dirty();
   }
 
   public get pending_destroy_count(): number {
@@ -431,26 +412,24 @@ export class Store {
     def: ComponentDef,
     values?: Record<string, number>,
   ): void {
-    if (__DEV__ && !this.is_alive(entity_id))
-      throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+    if (__DEV__ && !this.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_add_ids.push(entity_id);
     this.pending_add_defs.push(def);
     this.pending_add_values.push(values ?? EMPTY_VALUES);
   }
 
-  public remove_component_deferred(
-    entity_id: EntityID,
-    def: ComponentDef,
-  ): void {
-    if (__DEV__ && !this.is_alive(entity_id))
-      throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
+  public remove_component_deferred(entity_id: EntityID, def: ComponentDef): void {
+    if (__DEV__ && !this.is_alive(entity_id)) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
     this.pending_remove_ids.push(entity_id);
     this.pending_remove_defs.push(def);
   }
 
   public flush_structural(): void {
-    if (this.pending_add_ids.length > 0) this._flush_adds();
-    if (this.pending_remove_ids.length > 0) this._flush_removes();
+    const had_adds = this.pending_add_ids.length > 0;
+    const had_removes = this.pending_remove_ids.length > 0;
+    if (had_adds) this._flush_adds();
+    if (had_removes) this._flush_removes();
+    if (had_adds || had_removes) this._mark_queries_dirty();
   }
 
   /** Batch-apply all deferred component additions. */
@@ -466,6 +445,7 @@ export class Store {
     const archs = this.archetypes;
     const metas = this.component_metas;
     const hw = this.entity_high_water;
+    const tick = this._tick;
 
     for (let i = 0; i < n; i++) {
       const eid = ids[i];
@@ -481,7 +461,7 @@ export class Store {
       // Already has this component → overwrite field values in-place (no transition)
       if (src.mask.has(comp_id as number)) {
         if (metas[comp_id as number].field_names.length > 0) {
-          src.write_fields(ent_row[idx], comp_id, vals[i]);
+          src.write_fields(ent_row[idx], comp_id, vals[i], tick);
         }
         continue;
       }
@@ -498,7 +478,7 @@ export class Store {
           tgt.move_entity_from_tag(src, src_row, eid);
         } else {
           const edge = src.get_edge(comp_id)!;
-          tgt.move_entity_from(src, src_row, eid, edge.add_map!);
+          tgt.move_entity_from(src, src_row, eid, edge.add_map!, tick);
         }
         dst_row = _move_result[0];
         if (_move_result[1] !== NO_SWAP) ent_row[_move_result[1]] = src_row;
@@ -508,7 +488,7 @@ export class Store {
 
       // Write the new component's field values
       if (metas[comp_id as number].field_names.length > 0) {
-        tgt.write_fields(dst_row, comp_id, vals[i]);
+        tgt.write_fields(dst_row, comp_id, vals[i], tick);
       }
 
       ent_arch[idx] = tgt_id;
@@ -531,6 +511,7 @@ export class Store {
     const ent_gens = this.entity_generations;
     const archs = this.archetypes;
     const hw = this.entity_high_water;
+    const tick = this._tick;
 
     for (let i = 0; i < n; i++) {
       const eid = ids[i];
@@ -553,7 +534,7 @@ export class Store {
         tgt.move_entity_from_tag(src, src_row, eid);
       } else {
         const edge = src.get_edge(comp_id)!;
-        tgt.move_entity_from(src, src_row, eid, edge.remove_map!);
+        tgt.move_entity_from(src, src_row, eid, edge.remove_map!, tick);
       }
       if (_move_result[1] !== NO_SWAP) ent_row[_move_result[1]] = src_row;
 
@@ -573,9 +554,7 @@ export class Store {
   // Component registration
   // =======================================================
 
-  public register_component<S extends Record<string, TypedArrayTag>>(
-    schema: S,
-  ): ComponentDef<S> {
+  public register_component<S extends Record<string, TypedArrayTag>>(schema: S): ComponentDef<S> {
     const id = as_component_id(this.component_count++);
     const field_names = Object.keys(schema);
     const field_types: TypedArrayTag[] = new Array(field_names.length);
@@ -592,10 +571,7 @@ export class Store {
   // Immediate component operations (for setup/spawning)
   // =======================================================
 
-  public add_component(
-    entity_id: EntityID,
-    def: ComponentDef<Record<string, never>>,
-  ): void;
+  public add_component(entity_id: EntityID, def: ComponentDef<Record<string, never>>): void;
   public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -612,9 +588,7 @@ export class Store {
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.entity_archetype[
-      entity_index
-    ] as ArchetypeID;
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
     const current_arch = this.arch_get(current_archetype_id);
 
     // Already has this component → overwrite in-place (no archetype transition)
@@ -623,14 +597,12 @@ export class Store {
         this.entity_row[entity_index],
         def as ComponentID,
         values as Record<string, number>,
+        this._tick,
       );
       return;
     }
 
-    const target_archetype_id = this.arch_resolve_add(
-      current_archetype_id,
-      def,
-    );
+    const target_archetype_id = this.arch_resolve_add(current_archetype_id, def);
     const target_arch = this.arch_get(target_archetype_id);
     const src_row = this.entity_row[entity_index];
 
@@ -643,7 +615,7 @@ export class Store {
       if (tag_only) {
         target_arch.move_entity_from_tag(current_arch, src_row, entity_id);
       } else {
-        target_arch.move_entity_from(current_arch, src_row, entity_id, edge.add_map!);
+        target_arch.move_entity_from(current_arch, src_row, entity_id, edge.add_map!, this._tick);
       }
       dst_row = _move_result[0];
       if (_move_result[1] !== NO_SWAP) this.entity_row[_move_result[1]] = src_row;
@@ -657,10 +629,12 @@ export class Store {
       dst_row,
       def as ComponentID,
       values as Record<string, number>,
+      this._tick,
     );
 
     this.entity_archetype[entity_index] = target_archetype_id;
     this.entity_row[entity_index] = dst_row;
+    this._mark_queries_dirty();
   }
 
   /** Add multiple components in one transition (resolves final archetype, then moves once). */
@@ -677,17 +651,12 @@ export class Store {
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.entity_archetype[
-      entity_index
-    ] as ArchetypeID;
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
 
     // Walk the graph through all adds to find the final target archetype
     let target_archetype_id: ArchetypeID = current_archetype_id;
     for (let i = 0; i < entries.length; i++) {
-      target_archetype_id = this.arch_resolve_add(
-        target_archetype_id,
-        entries[i].def,
-      );
+      target_archetype_id = this.arch_resolve_add(target_archetype_id, entries[i].def);
     }
 
     if (target_archetype_id !== current_archetype_id) {
@@ -699,7 +668,7 @@ export class Store {
 
       if (src_row !== UNASSIGNED) {
         const map = build_transition_map(source_arch, target_arch);
-        target_arch.move_entity_from(source_arch, src_row, entity_id, map);
+        target_arch.move_entity_from(source_arch, src_row, entity_id, map, this._tick);
         dst_row = _move_result[0];
         if (_move_result[1] !== NO_SWAP) this.entity_row[_move_result[1]] = src_row;
       } else {
@@ -711,11 +680,13 @@ export class Store {
           dst_row,
           entries[i].def as ComponentID,
           entries[i].values ?? EMPTY_VALUES,
+          this._tick,
         );
       }
 
       this.entity_archetype[entity_index] = target_archetype_id;
       this.entity_row[entity_index] = dst_row;
+      this._mark_queries_dirty();
     } else {
       // All components already present — overwrite in-place
       const arch = this.arch_get(current_archetype_id);
@@ -725,32 +696,25 @@ export class Store {
           row,
           entries[i].def as ComponentID,
           entries[i].values ?? EMPTY_VALUES,
+          this._tick,
         );
       }
     }
   }
 
-  public remove_component(
-    entity_id: EntityID,
-    def: ComponentDef,
-  ): void {
+  public remove_component(entity_id: EntityID, def: ComponentDef): void {
     if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.entity_archetype[
-      entity_index
-    ] as ArchetypeID;
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
     const current_arch = this.arch_get(current_archetype_id);
 
     if (!current_arch.has_component(def)) return;
 
-    const target_archetype_id = this.arch_resolve_remove(
-      current_archetype_id,
-      def,
-    );
+    const target_archetype_id = this.arch_resolve_remove(current_archetype_id, def);
     const target_arch = this.arch_get(target_archetype_id);
     const src_row = this.entity_row[entity_index];
     const edge = current_arch.get_edge(def as unknown as ComponentID)!;
@@ -759,28 +723,24 @@ export class Store {
     if (tag_only) {
       target_arch.move_entity_from_tag(current_arch, src_row, entity_id);
     } else {
-      target_arch.move_entity_from(current_arch, src_row, entity_id, edge.remove_map!);
+      target_arch.move_entity_from(current_arch, src_row, entity_id, edge.remove_map!, this._tick);
     }
     if (_move_result[1] !== NO_SWAP) this.entity_row[_move_result[1]] = src_row;
 
     this.entity_archetype[entity_index] = target_archetype_id;
     this.entity_row[entity_index] = _move_result[0];
+    this._mark_queries_dirty();
   }
 
   /** Remove multiple components in one transition (resolves final archetype, then moves once). */
-  public remove_components(
-    entity_id: EntityID,
-    defs: ComponentDef[],
-  ): void {
+  public remove_components(entity_id: EntityID, defs: ComponentDef[]): void {
     if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return;
     }
 
     const entity_index = get_entity_index(entity_id);
-    const current_archetype_id = this.entity_archetype[
-      entity_index
-    ] as ArchetypeID;
+    const current_archetype_id = this.entity_archetype[entity_index] as ArchetypeID;
 
     // Walk the graph through all removes to find the final target archetype
     let target_archetype_id: ArchetypeID = current_archetype_id;
@@ -799,25 +759,21 @@ export class Store {
     const src_row = this.entity_row[entity_index];
 
     const map = build_transition_map(source_arch, target_arch);
-    target_arch.move_entity_from(source_arch, src_row, entity_id, map);
+    target_arch.move_entity_from(source_arch, src_row, entity_id, map, this._tick);
     if (_move_result[1] !== NO_SWAP) this.entity_row[_move_result[1]] = src_row;
 
     this.entity_archetype[entity_index] = target_archetype_id;
     this.entity_row[entity_index] = _move_result[0];
+    this._mark_queries_dirty();
   }
 
-  public has_component(
-    entity_id: EntityID,
-    def: ComponentDef,
-  ): boolean {
+  public has_component(entity_id: EntityID, def: ComponentDef): boolean {
     if (!this.is_alive(entity_id)) {
       if (__DEV__) throw new ECSError(ECS_ERROR.ENTITY_NOT_ALIVE);
       return false;
     }
     const entity_index = get_entity_index(entity_id);
-    return this.arch_get(
-      this.entity_archetype[entity_index] as ArchetypeID,
-    ).has_component(def);
+    return this.arch_get(this.entity_archetype[entity_index] as ArchetypeID).has_component(def);
   }
 
   /**
@@ -842,7 +798,7 @@ export class Store {
     const ent_arch = this.entity_archetype;
     const ent_row = this.entity_row;
 
-    const dst_start = tgt.bulk_move_all_from(src_arch, edge.add_map!);
+    const dst_start = tgt.bulk_move_all_from(src_arch, edge.add_map!, this._tick);
 
     // Update entity→archetype/row mappings for all moved entities
     for (let i = 0; i < count; i++) {
@@ -855,9 +811,10 @@ export class Store {
     const meta = this.component_metas[comp_id as number];
     if (meta.field_names.length > 0 && values) {
       for (let i = 0; i < count; i++) {
-        tgt.write_fields(dst_start + i, comp_id, values);
+        tgt.write_fields(dst_start + i, comp_id, values, this._tick);
       }
     }
+    this._mark_queries_dirty();
   }
 
   /**
@@ -865,10 +822,7 @@ export class Store {
    * Uses TypedArray.set() for O(columns) instead of O(N×columns).
    * The archetype must contain this component.
    */
-  public batch_remove_component(
-    src_arch: Archetype,
-    def: ComponentDef,
-  ): void {
+  public batch_remove_component(src_arch: Archetype, def: ComponentDef): void {
     if (src_arch.length === 0) return;
     const comp_id = def as unknown as ComponentID;
     if (!src_arch.mask.has(comp_id as number)) return;
@@ -878,7 +832,7 @@ export class Store {
     const edge = src_arch.get_edge(comp_id)!;
     const count = src_arch.length;
 
-    const dst_start = tgt.bulk_move_all_from(src_arch, edge.remove_map!);
+    const dst_start = tgt.bulk_move_all_from(src_arch, edge.remove_map!, this._tick);
 
     // Update entity→archetype/row mappings for all moved entities
     const ent_arch = this.entity_archetype;
@@ -888,6 +842,7 @@ export class Store {
       ent_arch[idx] = tgt_id;
       ent_row[idx] = dst_start + i;
     }
+    this._mark_queries_dirty();
   }
 
   // =======================================================
@@ -895,9 +850,7 @@ export class Store {
   // =======================================================
 
   public get_entity_archetype(entity_id: EntityID): Archetype {
-    return this.arch_get(
-      this.entity_archetype[get_entity_index(entity_id)] as ArchetypeID,
-    );
+    return this.arch_get(this.entity_archetype[get_entity_index(entity_id)] as ArchetypeID);
   }
 
   public get_entity_row(entity_id: EntityID): number {
@@ -930,8 +883,7 @@ export class Store {
     if (!has_any_bit) {
       return this.archetypes.filter(
         (arch) =>
-          (!excluded || !arch.mask.overlaps(excluded)) &&
-          (!any_of || arch.mask.overlaps(any_of)),
+          (!excluded || !arch.mask.overlaps(excluded)) && (!any_of || arch.mask.overlaps(any_of)),
       );
     }
 
@@ -978,23 +930,26 @@ export class Store {
    * Register a live query. Returns a mutable Archetype[] that this Store will
    * push newly-created matching archetypes into, keeping the query always up-to-date.
    */
-  public register_query(
-    include: BitSet,
-    exclude?: BitSet,
-    any_of?: BitSet,
-  ): Archetype[] {
-    const result = this.get_matching_archetypes(
-      include,
-      exclude,
-      any_of,
-    ) as Archetype[];
+  public register_query(include: BitSet, exclude?: BitSet, any_of?: BitSet): Archetype[] {
+    const result = this.get_matching_archetypes(include, exclude, any_of) as Archetype[];
     this.registered_queries.push({
       include_mask: include.copy(),
       exclude_mask: exclude ? exclude.copy() : null,
       any_of_mask: any_of ? any_of.copy() : null,
       result,
+      query: null,
     });
     return result;
+  }
+
+  public update_query_ref(result: Archetype[], query: Query<any>): void {
+    const rqs = this.registered_queries;
+    for (let i = 0; i < rqs.length; i++) {
+      if (rqs[i].result === result) {
+        rqs[i].query = query;
+        return;
+      }
+    }
   }
 
   public get archetype_count(): number {
@@ -1023,11 +978,8 @@ export class Store {
     this.event_channels[def as unknown as number].emit_signal();
   }
 
-  public get_event_reader<F extends ComponentFields>(
-    def: EventDef<F>,
-  ): EventReader<F> {
-    return this.event_channels[def as unknown as number]
-      .reader as EventReader<F>;
+  public get_event_reader<F extends ComponentFields>(def: EventDef<F>): EventReader<F> {
+    return this.event_channels[def as unknown as number].reader as EventReader<F>;
   }
 
   public clear_events(): void {
@@ -1038,47 +990,62 @@ export class Store {
   }
 
   // =======================================================
-  // Resource channels
+  // Event key storage
   // =======================================================
 
-  public register_resource<F extends readonly string[]>(
-    fields: F,
-    initial: Record<string, number>,
-  ): ResourceDef<F> {
-    const id = as_resource_id(this.resource_count++);
-    const channel = new ResourceChannel(fields as unknown as string[], initial);
-    this.resource_channels.push(channel);
-    return unsafe_cast<ResourceDef<F>>(id);
+  // any: type-erased — EventDef<F> phantom is lost in the map, recovered by callers via EventKey<F>
+  private readonly event_key_map: Map<symbol, EventDef<any>> = new Map();
+
+  public register_event_by_key<F extends readonly string[]>(key: symbol, fields: F): EventDef<F> {
+    if (this.event_key_map.has(key)) {
+      throw new ECSError(ECS_ERROR.EVENT_ALREADY_REGISTERED, "Event key already registered");
+    }
+    const def = this.register_event(fields);
+    this.event_key_map.set(key, def);
+    return def;
   }
 
-  public get_resource_reader<F extends ComponentFields>(
-    def: ResourceDef<F>,
-  ): ResourceReader<F> {
-    if (__DEV__) {
-      const idx = def as unknown as number;
-      if (idx < 0 || idx >= this.resource_channels.length) {
-        throw new ECSError(
-          ECS_ERROR.RESOURCE_NOT_REGISTERED,
-          `Resource with ID ${idx} not registered`,
-        );
-      }
+  // any: type-erased — caller recovers F from EventKey<F>
+  public get_event_def_by_key(key: symbol): EventDef<any> {
+    const def = this.event_key_map.get(key);
+    if (def === undefined) {
+      throw new ECSError(ECS_ERROR.EVENT_NOT_REGISTERED, "Event key not registered");
     }
-    return this.resource_channels[def as unknown as number]
-      .reader as ResourceReader<F>;
+    return def;
   }
 
-  public get_resource_channel(
-    def: ResourceDef<ComponentFields>,
-  ): ResourceChannel {
-    if (__DEV__) {
-      const idx = def as unknown as number;
-      if (idx < 0 || idx >= this.resource_channels.length) {
-        throw new ECSError(
-          ECS_ERROR.RESOURCE_NOT_REGISTERED,
-          `Resource with ID ${idx} not registered`,
-        );
-      }
+  public has_event_key(key: symbol): boolean {
+    return this.event_key_map.has(key);
+  }
+
+  // =======================================================
+  // Resource storage
+  // =======================================================
+
+  private readonly resource_key_map: Map<symbol, unknown> = new Map();
+
+  public register_resource(key: symbol, value: unknown): void {
+    if (this.resource_key_map.has(key)) {
+      throw new ECSError(ECS_ERROR.RESOURCE_ALREADY_REGISTERED, "Resource key already registered");
     }
-    return this.resource_channels[def as unknown as number];
+    this.resource_key_map.set(key, value);
+  }
+
+  public get_resource(key: symbol): unknown {
+    if (!this.resource_key_map.has(key)) {
+      throw new ECSError(ECS_ERROR.RESOURCE_NOT_REGISTERED, "Resource key not registered");
+    }
+    return this.resource_key_map.get(key);
+  }
+
+  public set_resource(key: symbol, value: unknown): void {
+    if (!this.resource_key_map.has(key)) {
+      throw new ECSError(ECS_ERROR.RESOURCE_NOT_REGISTERED, "Resource key not registered");
+    }
+    this.resource_key_map.set(key, value);
+  }
+
+  public has_resource(key: symbol): boolean {
+    return this.resource_key_map.has(key);
   }
 }

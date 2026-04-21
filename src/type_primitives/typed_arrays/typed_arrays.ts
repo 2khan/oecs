@@ -11,20 +11,10 @@
  *
  ***/
 
-import {
-  DEFAULT_INITIAL_CAPACITY,
-  GROWTH_FACTOR,
-} from "../../utils/constants";
+export const DEFAULT_INITIAL_CAPACITY = 16;
+export const GROWTH_FACTOR = 2;
 
-export type TypedArrayTag =
-  | "f32"
-  | "f64"
-  | "i8"
-  | "i16"
-  | "i32"
-  | "u8"
-  | "u16"
-  | "u32";
+export type TypedArrayTag = "f32" | "f64" | "i8" | "i16" | "i32" | "u8" | "u16" | "u32";
 
 export type AnyTypedArray =
   | Float32Array
@@ -42,7 +32,7 @@ export class GrowableTypedArray<T extends AnyTypedArray> {
 
   constructor(
     private readonly _ctor: new (n: number) => T,
-    initial_capacity = DEFAULT_INITIAL_CAPACITY,
+    initial_capacity = 16,
   ) {
     this._buf = new _ctor(initial_capacity);
   }
@@ -202,7 +192,4 @@ export const TypedArrayFor = {
   u8: GrowableUint8Array,
   u16: GrowableUint16Array,
   u32: GrowableUint32Array,
-} as const satisfies Record<
-  TypedArrayTag,
-  new (cap?: number) => GrowableTypedArray<AnyTypedArray>
->;
+} as const satisfies Record<TypedArrayTag, new (cap?: number) => GrowableTypedArray<AnyTypedArray>>;

@@ -3,7 +3,7 @@ import { Store } from "../../store";
 import { get_entity_index } from "../../entity";
 
 import type { ComponentID } from "../../component";
-import { BitSet } from "type_primitives";
+import { BitSet } from "../../type_primitives";
 
 function make_mask(...ids: (number | ComponentID)[]): BitSet {
   const mask = new BitSet();
@@ -162,9 +162,7 @@ describe("Store", () => {
     const id = store.create_entity();
     store.add_component(id, Pos, { x: 10, y: 20, z: 30 });
 
-    const archetypes = store.get_matching_archetypes(
-      make_mask(Pos as ComponentID),
-    );
+    const archetypes = store.get_matching_archetypes(make_mask(Pos as ComponentID));
     expect(archetypes[0].entity_count).toBe(1);
 
     store.destroy_entity_deferred(id);
@@ -351,9 +349,7 @@ describe("Store", () => {
     const id = store.create_entity();
     store.destroy_entity(id);
 
-    expect(() =>
-      store.add_component_deferred(id, Pos, { x: 0, y: 0, z: 0 }),
-    ).toThrow();
+    expect(() => store.add_component_deferred(id, Pos, { x: 0, y: 0, z: 0 })).toThrow();
   });
 
   it("throws on deferred remove from dead entity", () => {
@@ -465,9 +461,7 @@ describe("Store", () => {
     expect(store.has_component(e1, Marker)).toBe(true);
     expect(store.has_component(e2, Marker)).toBe(false);
 
-    const marker_archetypes = store.get_matching_archetypes(
-      make_mask(Marker as ComponentID),
-    );
+    const marker_archetypes = store.get_matching_archetypes(make_mask(Marker as ComponentID));
     expect(marker_archetypes.length).toBe(1);
     expect(marker_archetypes[0].entity_list).toContain(e1);
   });

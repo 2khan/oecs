@@ -44,7 +44,10 @@ describe("ECS query", () => {
 
     // Query [Pos] should match both archetypes
     const matches = world.query(Pos);
-    const all_entities = [...matches].flatMap((a) => [...a.entity_list]);
+    const all_entities: number[] = [];
+    matches.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) all_entities.push(a.entity_list[i]);
+    });
     expect(all_entities).toContain(e1);
     expect(all_entities).toContain(e2);
   });
@@ -155,7 +158,10 @@ describe("ECS query", () => {
     expect(q.archetype_count).toBe(1);
 
     // e2 should not appear in any archetype
-    const entity_ids = [...q].flatMap((a) => [...a.entity_list]);
+    const entity_ids: number[] = [];
+    q.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entity_ids.push(a.entity_list[i]);
+    });
     expect(entity_ids).toContain(e1);
     expect(entity_ids).not.toContain(e2);
   });
@@ -249,7 +255,10 @@ describe("ECS query", () => {
 
     const q = world.query(Pos).any_of(Vel, Hp);
 
-    const entity_ids = [...q].flatMap((a) => [...a.entity_list]);
+    const entity_ids: number[] = [];
+    q.for_each((a) => {
+      for (let i = 0; i < a.entity_count; i++) entity_ids.push(a.entity_list[i]);
+    });
     expect(entity_ids).toContain(e1);
     expect(entity_ids).toContain(e2);
     expect(entity_ids).not.toContain(e3);

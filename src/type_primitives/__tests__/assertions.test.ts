@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assert,
+  assert_non_null,
   is_non_negative_integer,
   is_non_null,
   unsafe_cast,
@@ -56,6 +57,35 @@ describe("assertions", () => {
   });
 
   //=========================================================
+  // assert_non_null
+  //=========================================================
+
+  it("assert_non_null does not throw for a defined value", () => {
+    expect(() => assert_non_null(42)).not.toThrow();
+    expect(() => assert_non_null("hello")).not.toThrow();
+    expect(() => assert_non_null(0)).not.toThrow();
+    expect(() => assert_non_null(false)).not.toThrow();
+    expect(() => assert_non_null("")).not.toThrow();
+  });
+
+  it("assert_non_null throws TypeError for null", () => {
+    expect(() => assert_non_null(null)).toThrow(TypeError);
+  });
+
+  it("assert_non_null throws TypeError for undefined", () => {
+    expect(() => assert_non_null(undefined)).toThrow(TypeError);
+  });
+
+  it("assert_non_null error has ASSERTION_FAIL_NON_NULLABLE category", () => {
+    try {
+      assert_non_null(null);
+    } catch (e) {
+      expect(e).toBeInstanceOf(TypeError);
+      expect((e as TypeError).category).toBe(TYPE_ERROR.ASSERTION_FAIL_NON_NULLABLE);
+    }
+  });
+
+  //=========================================================
   // assert
   //=========================================================
 
@@ -66,9 +96,7 @@ describe("assertions", () => {
 
   it("assert throws TypeError when condition fails", () => {
     const is_positive = (v: number): v is number => v > 0;
-    expect(() => assert(-1, is_positive, "must be positive")).toThrow(
-      TypeError,
-    );
+    expect(() => assert(-1, is_positive, "must be positive")).toThrow(TypeError);
   });
 
   it("assert error has ASSERTION_FAIL_CONDITION category", () => {
@@ -77,9 +105,7 @@ describe("assertions", () => {
       assert(-1, is_positive, "must be positive");
     } catch (e) {
       expect(e).toBeInstanceOf(TypeError);
-      expect((e as TypeError).category).toBe(
-        TYPE_ERROR.ASSERTION_FAIL_CONDITION,
-      );
+      expect((e as TypeError).category).toBe(TYPE_ERROR.ASSERTION_FAIL_CONDITION);
     }
   });
 
@@ -97,18 +123,12 @@ describe("assertions", () => {
   //=========================================================
 
   it("validate_and_cast returns the value when validation passes", () => {
-    const result = validate_and_cast(
-      42,
-      (v) => Number.isInteger(v) && v > 0,
-      "positive integer",
-    );
+    const result = validate_and_cast(42, (v) => Number.isInteger(v) && v > 0, "positive integer");
     expect(result).toBe(42);
   });
 
   it("validate_and_cast throws TypeError when validation fails", () => {
-    expect(() =>
-      validate_and_cast(-1, (v) => v > 0, "positive number"),
-    ).toThrow(TypeError);
+    expect(() => validate_and_cast(-1, (v) => v > 0, "positive number")).toThrow(TypeError);
   });
 
   it("validate_and_cast error has VALIDATION_FAIL_CONDITION category", () => {
@@ -116,9 +136,7 @@ describe("assertions", () => {
       validate_and_cast(-1, (v) => v > 0, "positive number");
     } catch (e) {
       expect(e).toBeInstanceOf(TypeError);
-      expect((e as TypeError).category).toBe(
-        TYPE_ERROR.VALIDATION_FAIL_CONDITION,
-      );
+      expect((e as TypeError).category).toBe(TYPE_ERROR.VALIDATION_FAIL_CONDITION);
     }
   });
 

@@ -7,7 +7,7 @@ import {
 } from "../../archetype";
 import { as_component_id, type ComponentDef } from "../../component";
 import { create_entity_id } from "../../entity";
-import { BitSet, unsafe_cast } from "type_primitives";
+import { BitSet, unsafe_cast } from "../../type_primitives";
 
 // Helpers
 const arch_id = (n: number) => as_archetype_id(n);
@@ -245,7 +245,7 @@ describe("Archetype", () => {
     const a = new Archetype(arch_id(0), make_mask(1), [layout]);
 
     const row = a.add_entity(entity(0));
-    a.write_fields(row, comp_id(1), { x: 10, y: 20 });
+    a.write_fields(row, comp_id(1), { x: 10, y: 20 }, 0);
 
     expect(a.read_field(row, comp_id(1), "x")).toBe(10);
     expect(a.read_field(row, comp_id(1), "y")).toBe(20);
@@ -259,9 +259,9 @@ describe("Archetype", () => {
     a.add_entity(entity(1));
     a.add_entity(entity(2));
 
-    a.write_fields(0, comp_id(1), { x: 100 });
-    a.write_fields(1, comp_id(1), { x: 200 });
-    a.write_fields(2, comp_id(1), { x: 300 });
+    a.write_fields(0, comp_id(1), { x: 100 }, 0);
+    a.write_fields(1, comp_id(1), { x: 200 }, 0);
+    a.write_fields(2, comp_id(1), { x: 300 }, 0);
 
     const def = unsafe_cast<ComponentDef<{ x: "f64" }>>(comp_id(1));
     const col = a.get_column(def, "x");
@@ -276,13 +276,13 @@ describe("Archetype", () => {
 
     // Add 3 entities with distinct data
     a.add_entity(entity(0)); // row 0
-    a.write_fields(0, comp_id(1), { x: 10, y: 11 });
+    a.write_fields(0, comp_id(1), { x: 10, y: 11 }, 0);
 
     a.add_entity(entity(1)); // row 1
-    a.write_fields(1, comp_id(1), { x: 20, y: 21 });
+    a.write_fields(1, comp_id(1), { x: 20, y: 21 }, 0);
 
     a.add_entity(entity(2)); // row 2
-    a.write_fields(2, comp_id(1), { x: 30, y: 31 });
+    a.write_fields(2, comp_id(1), { x: 30, y: 31 }, 0);
 
     // Remove row 0 — entity(2) (row 2) swaps into row 0
     a.remove_entity(0);
@@ -303,12 +303,12 @@ describe("Archetype", () => {
     const a = new Archetype(arch_id(0), make_mask(1, 2), [layout_a, layout_b]);
 
     a.add_entity(entity(0)); // row 0
-    a.write_fields(0, comp_id(1), { a: 100 });
-    a.write_fields(0, comp_id(2), { b: -1 });
+    a.write_fields(0, comp_id(1), { a: 100 }, 0);
+    a.write_fields(0, comp_id(2), { b: -1 }, 0);
 
     a.add_entity(entity(1)); // row 1
-    a.write_fields(1, comp_id(1), { a: 200 });
-    a.write_fields(1, comp_id(2), { b: -2 });
+    a.write_fields(1, comp_id(1), { a: 200 }, 0);
+    a.write_fields(1, comp_id(2), { b: -2 }, 0);
 
     // Remove row 0 — entity(1) swaps into row 0
     a.remove_entity(0);
@@ -323,10 +323,10 @@ describe("Archetype", () => {
     const dst = new Archetype(arch_id(1), make_mask(1), [layout]);
 
     src.add_entity(entity(0));
-    src.write_fields(0, comp_id(1), { x: 42 });
+    src.write_fields(0, comp_id(1), { x: 42 }, 0);
 
     const dst_row = dst.add_entity(entity(0));
-    dst.copy_shared_from(src, 0, dst_row);
+    dst.copy_shared_from(src, 0, dst_row, 0);
 
     expect(dst.read_field(dst_row, comp_id(1), "x")).toBe(42);
   });
@@ -338,7 +338,7 @@ describe("Archetype", () => {
     // Add more entities than initial capacity
     for (let i = 0; i < 50; i++) {
       const row = a.add_entity(entity(i));
-      a.write_fields(row, comp_id(1), { v: i * 10 });
+      a.write_fields(row, comp_id(1), { v: i * 10 }, 0);
     }
 
     expect(a.entity_count).toBe(50);
