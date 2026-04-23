@@ -80,6 +80,10 @@ export class Archetype {
   private readonly _entity_ids: GrowableUint32Array;
   public length: number = 0;
   private readonly edges: ArchetypeEdge[] = [];
+  // Cache for multi-component transition maps (from this archetype to another).
+  // Covers add_components / remove_components where the (src, dst) pair is not
+  // a single-component edge and therefore not covered by `edges[].add_map/remove_map`.
+  private readonly batch_transition_maps: Map<ArchetypeID, Int16Array> = new Map();
 
   // --- Flat column storage ---
   // Dense array of ALL columns across all components in this archetype.
@@ -447,6 +451,20 @@ export class Archetype {
 
   public set_edge(component_id: ComponentID, edge: ArchetypeEdge): void {
     this.edges[component_id] = edge;
+  }
+
+  /**
+   * Get the cached transition map from this archetype to `target`, building
+   * and caching it on miss. Archetypes live for the lifetime of the Store,
+   * so entries never need invalidation.
+   */
+  public get_batch_transition_map(target: Archetype): Int16Array {
+    let map = this.batch_transition_maps.get(target.id);
+    if (map === undefined) {
+      map = build_transition_map(this, target);
+      this.batch_transition_maps.set(target.id, map);
+    }
+    return map;
   }
 }
 

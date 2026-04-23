@@ -667,7 +667,7 @@ export class Store {
       let dst_row: number;
 
       if (src_row !== UNASSIGNED) {
-        const map = build_transition_map(source_arch, target_arch);
+        const map = source_arch.get_batch_transition_map(target_arch);
         target_arch.move_entity_from(source_arch, src_row, entity_id, map, this._tick);
         dst_row = _move_result[0];
         if (_move_result[1] !== NO_SWAP) this.entity_row[_move_result[1]] = src_row;
