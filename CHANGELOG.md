@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-04-23
+
+Performance-only patch release. Two targeted allocation-elimination changes on hot paths; no API changes; full 466-test suite unchanged.
+
+### Performance
+
+- **Cache multi-component transition maps on `Archetype`.** `add_components` / `remove_components` on already-populated entities previously allocated a fresh `Int16Array` per call via `build_transition_map`. A per-archetype `batch_transition_maps: Map<ArchetypeID, Int16Array>` now caches the map on first use. Single-component paths unchanged. Measured: **+12–15%** throughput on `add_components` (already-populated) at 10k / 100k / 1M; **−35–42%** peak heap and **−49–61%** peak RSS on the same workload. ([#9](https://github.com/oasys-works/oecs/pull/9))
+- **Per-Query composition cache for single-component composition shapes.** `q.and(X)`, `q.not(X)`, `q.any_of(X)`, and `q.changed(X)` previously allocated a BitSet copy, a defs slice (and, for `.changed`, a new `ChangedQuery`) on every call, even though the resolver already cached the resulting `Query` object. Single-component calls now short-circuit through a per-parent-`Query` Map and skip the allocation path entirely. Multi-component compositions fall through unchanged. Measured: **~6×** throughput on a 4-shape compose loop at 10k / 100k / 1M; **−40–56%** peak heap and **essentially zero RSS growth** during the workload. ([#10](https://github.com/oasys-works/oecs/pull/10))
+
 ## [0.3.0] — 2026-04-21
 
 A substantial release focused on change detection, stricter component-access
