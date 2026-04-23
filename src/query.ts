@@ -78,6 +78,16 @@ export class Query<Defs extends readonly ComponentDef[]> {
   private readonly _any_of: BitSet | null;
   private _non_empty_archetypes: Archetype[] = [];
   private _non_empty_dirty: boolean = true;
+  // Per-Query composition caches — single-component fast path.
+  // The final Query produced by _resolve_query is already cached by the
+  // resolver, but the caller pays a BitSet copy + defs slice per call
+  // before the resolver can hash and hit that cache. These caches
+  // short-circuit that allocation path for the common single-component
+  // composition shape (q.and(X), q.changed(X), etc).
+  private _and_cache_single: Map<number, Query<any>> | null = null;
+  private _not_cache_single: Map<number, Query<any>> | null = null;
+  private _any_of_cache_single: Map<number, Query<any>> | null = null;
+  private _changed_cache_single: Map<number, ChangedQuery<any>> | null = null;
 
   constructor(
     archetypes: Archetype[],
@@ -113,6 +123,25 @@ export class Query<Defs extends readonly ComponentDef[]> {
 
   /** Extend required component set. Returns a new (cached) Query. */
   public and<D extends ComponentDef[]>(...comps: D): Query<[...Defs, ...D]> {
+    // Fast path: single-component composition (common shape, e.g. q.and(Dead)).
+    // Skip BitSet/defs allocations when we already have a cached child.
+    if (comps.length === 1) {
+      const cid = comps[0] as unknown as number;
+      const cache = this._and_cache_single;
+      if (cache !== null) {
+        const hit = cache.get(cid);
+        if (hit !== undefined) return hit;
+      }
+      const new_include = this._include.copy();
+      const new_defs = this._defs.slice() as ComponentDef[];
+      if (!new_include.has(cid)) {
+        new_include.set(cid);
+        new_defs.push(comps[0]);
+      }
+      const q = this._resolver._resolve_query(new_include, this._exclude, this._any_of, new_defs);
+      (this._and_cache_single ??= new Map()).set(cid, q);
+      return q;
+    }
     const new_include = this._include.copy();
     const new_defs = this._defs.slice() as ComponentDef[];
     for (let i = 0; i < comps.length; i++) {
@@ -126,6 +155,24 @@ export class Query<Defs extends readonly ComponentDef[]> {
 
   /** Exclude archetypes that have any of these components. */
   public not(...comps: ComponentDef[]): Query<Defs> {
+    if (comps.length === 1) {
+      const cid = comps[0] as unknown as number;
+      const cache = this._not_cache_single;
+      if (cache !== null) {
+        const hit = cache.get(cid);
+        if (hit !== undefined) return hit as Query<Defs>;
+      }
+      const new_exclude = this._exclude ? this._exclude.copy() : new BitSet();
+      new_exclude.set(cid);
+      const q = this._resolver._resolve_query(
+        this._include,
+        new_exclude,
+        this._any_of,
+        this._defs,
+      ) as Query<Defs>;
+      (this._not_cache_single ??= new Map()).set(cid, q);
+      return q;
+    }
     const new_exclude = this._exclude ? this._exclude.copy() : new BitSet();
     for (let i = 0; i < comps.length; i++) new_exclude.set(comps[i] as number);
     return this._resolver._resolve_query(
@@ -164,6 +211,24 @@ export class Query<Defs extends readonly ComponentDef[]> {
 
   /** Require at least one of these components. */
   public any_of(...comps: ComponentDef[]): Query<Defs> {
+    if (comps.length === 1) {
+      const cid = comps[0] as unknown as number;
+      const cache = this._any_of_cache_single;
+      if (cache !== null) {
+        const hit = cache.get(cid);
+        if (hit !== undefined) return hit as Query<Defs>;
+      }
+      const new_any_of = this._any_of ? this._any_of.copy() : new BitSet();
+      new_any_of.set(cid);
+      const q = this._resolver._resolve_query(
+        this._include,
+        this._exclude,
+        new_any_of,
+        this._defs,
+      ) as Query<Defs>;
+      (this._any_of_cache_single ??= new Map()).set(cid, q);
+      return q;
+    }
     const new_any_of = this._any_of ? this._any_of.copy() : new BitSet();
     for (let i = 0; i < comps.length; i++) new_any_of.set(comps[i] as number);
     return this._resolver._resolve_query(
@@ -176,6 +241,17 @@ export class Query<Defs extends readonly ComponentDef[]> {
 
   /** Create a ChangedQuery that filters archetypes by change tick. */
   public changed(...defs: ComponentDef[]): ChangedQuery<Defs> {
+    if (defs.length === 1) {
+      const cid = defs[0] as unknown as number;
+      const cache = this._changed_cache_single;
+      if (cache !== null) {
+        const hit = cache.get(cid);
+        if (hit !== undefined) return hit as ChangedQuery<Defs>;
+      }
+      const cq = new ChangedQuery<Defs>(this, [cid]);
+      (this._changed_cache_single ??= new Map()).set(cid, cq);
+      return cq;
+    }
     const ids: number[] = new Array(defs.length);
     for (let i = 0; i < defs.length; i++) ids[i] = defs[i] as unknown as number;
     return new ChangedQuery(this, ids);
