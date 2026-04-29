@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] — 2026-04-30
+
+Release-process and packaging hygiene. No runtime changes.
+
+### Changed
+
+- **JSR bundle slimmed.** `.github/` and `docs/` are now excluded from the published JSR package. Consumers download less; build/CI artefacts stay on GitHub.
+- **Tag-driven publish workflow.** `.github/workflows/publish.yml` now triggers on `v*` tag pushes instead of every push to `main`, and creates a GitHub Release alongside the JSR publish. Cuts a release by tagging.
+
+## [0.3.2] — 2026-04-30
+
+Documentation-only release. No runtime changes.
+
+### Added
+
+- **Module overview on `src/index.ts`.** A `@module` block now renders as the JSR Overview tab.
+- **JSDoc on the full public surface.** `ECS` and its public methods, `Query` / `QueryBuilder` / `SystemContext` / `ChangedQuery`, all type aliases and interfaces, the event/resource key minters, and the `SCHEDULE` phases are now documented in-source.
+- **`@internal` tags on internal-but-public TS members** (e.g. `_resolve_query`, `Query._include`, `SystemContext.store`) so JSR hides them from the rendered docs.
+
 ## [0.3.1] — 2026-04-23
 
 Performance-only patch release. Two targeted allocation-elimination changes on hot paths; no API changes; full 466-test suite unchanged.
