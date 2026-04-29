@@ -22,6 +22,15 @@ import { Brand, unsafe_cast } from "./type_primitives";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { TOTAL_PACKED_BITS } from "./utils/constants";
 
+/**
+ * A live entity handle — a packed generational ID encoding a slot index
+ * (low 20 bits, up to ~1M entities) and a generation counter (high 11
+ * bits, up to 2047). Issued by {@link ECS.create_entity}.
+ *
+ * After {@link ECS.destroy_entity_deferred}, the slot's generation is
+ * bumped and stale IDs referring to that slot are detected as dead by
+ * {@link ECS.is_alive}.
+ */
 export type EntityID = Brand<number, "entity_id">;
 
 export const INDEX_BITS = 20;

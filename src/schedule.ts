@@ -31,13 +31,33 @@ import type { SystemDescriptor } from "./system";
 import { ECS_ERROR, ECSError } from "./utils/error";
 import { STARTUP_DELTA_TIME } from "./utils/constants";
 
+/**
+ * The seven system execution phases.
+ *
+ * Startup phases run once during {@link ECS.startup}; update and fixed
+ * phases run on every {@link ECS.update}. Within each phase, systems are
+ * topologically sorted by their `before`/`after` constraints, with
+ * insertion order as a deterministic tiebreaker. Deferred structural
+ * changes are flushed between phases.
+ */
 export enum SCHEDULE {
+  /** Runs once, before {@link SCHEDULE.STARTUP}. For setting up resources. */
   PRE_STARTUP = "PRE_STARTUP",
+  /** Runs once. Main initialization phase. */
   STARTUP = "STARTUP",
+  /** Runs once, after {@link SCHEDULE.STARTUP}. For post-init cross-wiring. */
   POST_STARTUP = "POST_STARTUP",
+  /**
+   * Runs zero or more times per {@link ECS.update}, at the fixed timestep
+   * configured by {@link WorldOptions.fixed_timestep}. Use for deterministic
+   * simulation (physics, networking, AI).
+   */
   FIXED_UPDATE = "FIXED_UPDATE",
+  /** Runs every frame, before {@link SCHEDULE.UPDATE}. For input gathering. */
   PRE_UPDATE = "PRE_UPDATE",
+  /** Runs every frame. Main per-frame logic. */
   UPDATE = "UPDATE",
+  /** Runs every frame, after {@link SCHEDULE.UPDATE}. For rendering, late fixups. */
   POST_UPDATE = "POST_UPDATE",
 }
 
@@ -45,13 +65,26 @@ const STARTUP_LABELS = [SCHEDULE.PRE_STARTUP, SCHEDULE.STARTUP, SCHEDULE.POST_ST
 
 const UPDATE_LABELS = [SCHEDULE.PRE_UPDATE, SCHEDULE.UPDATE, SCHEDULE.POST_UPDATE] as const;
 
+/**
+ * Ordering constraints for a system within a phase. Cycles trigger an
+ * `ECSError` at sort time.
+ */
 export interface SystemOrdering {
+  /** Systems that must run after this one. */
   before?: SystemDescriptor[];
+  /** Systems that must run before this one. */
   after?: SystemDescriptor[];
 }
 
+/**
+ * A scheduled-system entry — pairs a {@link SystemDescriptor} with optional
+ * ordering. Pass to {@link ECS.add_systems} to attach `before`/`after`
+ * constraints; for unconstrained scheduling, pass the descriptor directly.
+ */
 export interface SystemEntry {
+  /** The system to schedule. */
   system: SystemDescriptor;
+  /** Optional ordering constraints relative to other systems in the same phase. */
   ordering?: SystemOrdering;
 }
 

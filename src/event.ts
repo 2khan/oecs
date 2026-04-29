@@ -46,8 +46,21 @@ export type EventDef<F extends ComponentFields = ComponentFields> = EventID & {
   readonly [__event_schema]: F;
 };
 
-/** Reader view over an event channel's SoA columns. */
+/**
+ * Read view over an event channel — exposes a `length` plus one
+ * `number[]` column per registered field. Iterate up to `length` and read
+ * the same index across columns for the i-th event.
+ *
+ * @example
+ * ```ts
+ * const dmg = ctx.read(DamageEvent);
+ * for (let i = 0; i < dmg.length; i++) {
+ *   apply(dmg.target[i], dmg.amount[i]);
+ * }
+ * ```
+ */
 export type EventReader<F extends ComponentFields> = {
+  /** Number of events emitted this frame. */
   length: number;
 } & ColumnsForFields<F>;
 
@@ -102,14 +115,46 @@ export class EventChannel {
 
 declare const __event_key_schema: unique symbol;
 
+/**
+ * Module-scope handle for an event channel. The phantom `F` type parameter
+ * carries the field names so {@link ECS.emit | emit} and
+ * {@link ECS.read | read} are type-checked end-to-end.
+ *
+ * Created with {@link event_key} (typed events) or {@link signal_key}
+ * (zero-field events). Register the channel with
+ * {@link ECS.register_event} or {@link ECS.register_signal}.
+ */
 export type EventKey<F extends ComponentFields = ComponentFields> = symbol & {
   readonly [__event_key_schema]: F;
 };
 
+/**
+ * Mint a new {@link EventKey} for a typed event. Pass the field-name tuple
+ * as the type argument; register with {@link ECS.register_event}.
+ *
+ * @param name - Description used for the underlying `Symbol`. Aids
+ *   debugging; not significant to identity.
+ *
+ * @example
+ * ```ts
+ * export const DamageEvent = event_key<readonly ["target", "amount"]>("Damage");
+ * ```
+ */
 export function event_key<F extends readonly string[]>(name: string): EventKey<F> {
   return unsafe_cast<EventKey<F>>(Symbol(name));
 }
 
+/**
+ * Mint a new zero-field {@link EventKey} — a signal carrying no payload,
+ * just an emission count. Register with {@link ECS.register_signal}.
+ *
+ * @example
+ * ```ts
+ * export const GameStarted = signal_key("GameStarted");
+ * world.register_signal(GameStarted);
+ * world.emit(GameStarted);
+ * ```
+ */
 export function signal_key(name: string): EventKey<readonly []> {
   return unsafe_cast<EventKey<readonly []>>(Symbol(name));
 }

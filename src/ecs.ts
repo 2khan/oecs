@@ -87,12 +87,46 @@ import {
   HASH_SECONDARY_PRIME,
 } from "./utils/constants";
 
+/**
+ * Construction options for {@link ECS}.
+ */
 export interface WorldOptions {
+  /**
+   * Step size in seconds for {@link SCHEDULE.FIXED_UPDATE}. Defaults to
+   * `1 / 60` (60 Hz). Drives deterministic simulation regardless of frame rate.
+   */
   fixed_timestep?: number;
+  /**
+   * Maximum number of fixed-update steps to run per call to {@link ECS.update}.
+   * Caps the spiral-of-death when frame time exceeds the fixed step budget.
+   * Defaults to 5.
+   */
   max_fixed_steps?: number;
+  /**
+   * Initial entity slot capacity. The store grows as needed; tuning this
+   * avoids early reallocations for known-large worlds.
+   */
   initial_capacity?: number;
 }
 
+/**
+ * The ECS world — owner of entities, components, resources, events, and the
+ * system schedule. The single public entry point of the library.
+ *
+ * Construct one per simulation, register components/resources/events,
+ * register systems, then drive it with {@link ECS.startup} once and
+ * {@link ECS.update} every frame.
+ *
+ * @example
+ * ```ts
+ * const world = new ECS({ fixed_timestep: 1 / 50 });
+ * const Pos = world.register_component({ x: "f64", y: "f64" });
+ * const e = world.create_entity();
+ * world.add_component(e, Pos, { x: 0, y: 0 });
+ * world.startup();
+ * world.update(1 / 60);
+ * ```
+ */
 export class ECS implements QueryResolver {
   private readonly store: Store;
   private readonly schedule: Schedule;
@@ -123,6 +157,10 @@ export class ECS implements QueryResolver {
     this._max_fixed_steps = options?.max_fixed_steps ?? DEFAULT_MAX_FIXED_STEPS;
   }
 
+  /**
+   * Step size in seconds for {@link SCHEDULE.FIXED_UPDATE}. Mutating this
+   * at runtime takes effect on the next call to {@link ECS.update}.
+   */
   public get fixed_timestep(): number {
     return this._fixed_timestep;
   }
@@ -131,18 +169,40 @@ export class ECS implements QueryResolver {
     this._fixed_timestep = value;
   }
 
+  /**
+   * Interpolation factor in `[0, 1)` representing how far the fixed-step
+   * accumulator has advanced toward the next fixed update. Useful for
+   * smoothing rendering between fixed simulation steps.
+   */
   public get fixed_alpha(): number {
     return this._accumulator / this._fixed_timestep;
   }
 
-  // Overload 1: record syntax (per-field types)
+  /**
+   * Register a component type and obtain its phantom-typed handle.
+   *
+   * Two call shapes are supported:
+   *
+   * - **Record syntax** for per-field control:
+   *   ```ts
+   *   const Health = world.register_component({ current: "i32", max: "i32" });
+   *   ```
+   * - **Array shorthand** for uniform-typed fields (defaults to `"f64"`):
+   *   ```ts
+   *   const Vel = world.register_component(["vx", "vy"] as const);
+   *   const Pos = world.register_component(["x", "y", "z"] as const, "f32");
+   *   ```
+   *
+   * For zero-field marker components, prefer {@link ECS.register_tag}.
+   *
+   * @returns A {@link ComponentDef} carrying the schema at the type level.
+   *   At runtime this is a branded number (the component ID).
+   */
   public register_component<S extends Record<string, TypedArrayTag>>(schema: S): ComponentDef<S>;
-  // Overload 2: array shorthand (uniform type, defaults to "f64")
   public register_component<const F extends readonly string[], T extends TypedArrayTag = "f64">(
     fields: F,
     type?: T,
   ): ComponentDef<{ readonly [K in F[number]]: T }>;
-  // Implementation
   public register_component(
     schema_or_fields: Record<string, TypedArrayTag> | readonly string[],
     type?: TypedArrayTag,
@@ -156,50 +216,113 @@ export class ECS implements QueryResolver {
     return this.store.register_component(schema_or_fields as Record<string, TypedArrayTag>);
   }
 
+  /**
+   * Register a tag component — a zero-field marker that participates in
+   * archetype matching but stores no data. Add with no `values` argument.
+   *
+   * @example
+   * ```ts
+   * const IsEnemy = world.register_tag();
+   * world.add_component(e, IsEnemy);
+   * ```
+   */
   public register_tag(): ComponentDef<Record<string, never>> {
     return this.store.register_component({} as Record<string, never>);
   }
 
+  /**
+   * Register an event channel for a typed event key. Field names must
+   * match the key's `F` type parameter exactly.
+   *
+   * @example
+   * ```ts
+   * const DamageEvent = event_key<readonly ["target", "amount"]>("Damage");
+   * world.register_event(DamageEvent, ["target", "amount"] as const);
+   * ```
+   */
   public register_event<F extends readonly string[]>(key: EventKey<F>, fields: F): void {
     this.store.register_event_by_key(key, fields);
   }
 
+  /**
+   * Register a zero-field signal — a payload-less event used to broadcast
+   * a moment of interest (e.g. `"GameStarted"`). Read length to detect emissions.
+   */
   public register_signal(key: EventKey<readonly []>): void {
     this.store.register_event_by_key(key, [] as unknown as readonly string[]);
   }
 
+  /**
+   * Register a resource (a typed global singleton) under the given key.
+   * Resources are not entities — use them for things like time, input, config.
+   *
+   * @example
+   * ```ts
+   * const TimeRes = resource_key<{ delta: number }>("Time");
+   * world.register_resource(TimeRes, { delta: 0 });
+   * ```
+   */
   public register_resource<T>(key: ResourceKey<T>, value: T): void {
     this.store.register_resource(key, value);
   }
 
+  /**
+   * Read a resource by key. Throws in development if the key has not been
+   * registered with {@link ECS.register_resource}.
+   */
   public resource<T>(key: ResourceKey<T>): T {
     return unsafe_cast<T>(this.store.get_resource(key));
   }
 
+  /** Replace the stored value for a resource. */
   public set_resource<T>(key: ResourceKey<T>, value: T): void {
     this.store.set_resource(key, value);
   }
 
+  /** True if a resource has been registered for the given key. */
   public has_resource<T>(key: ResourceKey<T>): boolean {
     return this.store.has_resource(key);
   }
 
+  /**
+   * Create a new entity and return its generational ID. The entity has no
+   * components until {@link ECS.add_component} or {@link ECS.add_components}
+   * is called.
+   */
   public create_entity(): EntityID {
     return this.store.create_entity();
   }
 
+  /**
+   * Buffer an entity for destruction. The entity is destroyed at the next
+   * structural flush (between system phases, or via {@link ECS.flush}).
+   * Calls on an already-buffered or already-dead entity are a no-op.
+   */
   public destroy_entity_deferred(id: EntityID): void {
     this.store.destroy_entity_deferred(id);
   }
 
+  /** True if the given entity ID still refers to a live entity. */
   public is_alive(id: EntityID): boolean {
     return this.store.is_alive(id);
   }
 
+  /** Number of currently alive entities. */
   public get entity_count(): number {
     return this.store.entity_count;
   }
 
+  /**
+   * Add a component to an entity. For tag components (zero fields), omit
+   * the `values` argument. Adding a component an entity already has updates
+   * its values in place rather than moving archetypes.
+   *
+   * @example
+   * ```ts
+   * world.add_component(e, Pos, { x: 0, y: 0 });
+   * world.add_component(e, IsEnemy); // tag — no values
+   * ```
+   */
   public add_component(entity_id: EntityID, def: ComponentDef<Record<string, never>>): this;
   public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
@@ -215,6 +338,11 @@ export class ECS implements QueryResolver {
     return this;
   }
 
+  /**
+   * Add several components to an entity in a single archetype transition.
+   * Cheaper than calling {@link ECS.add_component} repeatedly because the
+   * entity moves archetypes once instead of once per component.
+   */
   public add_components(
     entity_id: EntityID,
     entries: {
@@ -225,22 +353,33 @@ export class ECS implements QueryResolver {
     this.store.add_components(entity_id, entries);
   }
 
+  /**
+   * Remove a component from an entity. No-op if the entity does not have
+   * the component.
+   */
   public remove_component(entity_id: EntityID, def: ComponentDef): this {
     this.store.remove_component(entity_id, def);
     return this;
   }
 
+  /**
+   * Remove several components from an entity in a single archetype
+   * transition. Cheaper than calling {@link ECS.remove_component} repeatedly.
+   */
   public remove_components(entity_id: EntityID, ...defs: ComponentDef[]): void {
     this.store.remove_components(entity_id, defs);
   }
 
+  /** True if the entity currently has the given component. */
   public has_component(entity_id: EntityID, def: ComponentDef): boolean {
     return this.store.has_component(entity_id, def);
   }
 
   /**
-   * Bulk add a component to ALL entities in the given archetype.
-   * O(columns) via TypedArray.set() instead of O(N×columns).
+   * Add a component to **every** entity in the given archetype in O(columns)
+   * time using `TypedArray.set()` rather than O(N × columns).
+   *
+   * Useful for bulk operations like "tag every visible chunk as dirty."
    */
   public batch_add_component(src_arch: Archetype, def: ComponentDef<Record<string, never>>): void;
   public batch_add_component<S extends ComponentSchema>(
@@ -257,13 +396,20 @@ export class ECS implements QueryResolver {
   }
 
   /**
-   * Bulk remove a component from ALL entities in the given archetype.
-   * O(columns) via TypedArray.set() instead of O(N×columns).
+   * Remove a component from **every** entity in the given archetype in
+   * O(columns) time, using `TypedArray.set()` rather than O(N × columns).
    */
   public batch_remove_component(src_arch: Archetype, def: ComponentDef): void {
     this.store.batch_remove_component(src_arch, def);
   }
 
+  /**
+   * Read a single field from a component on a single entity.
+   *
+   * For repeated access on the same entity, prefer
+   * {@link SystemContext.ref} (cached accessor) inside systems, or fetch
+   * the column directly from the archetype for hot loops.
+   */
   public get_field<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -277,6 +423,10 @@ export class ECS implements QueryResolver {
     return arch.read_field(row, def as unknown as ComponentID, field);
   }
 
+  /**
+   * Write a single field on a component for a single entity. Marks the
+   * component as changed for {@link Query.changed} detection.
+   */
   public set_field<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -292,6 +442,17 @@ export class ECS implements QueryResolver {
     col[row] = value;
   }
 
+  /**
+   * Emit an event or signal. For zero-field signals, omit `values`. The
+   * event is readable within the current frame and auto-cleared at end of
+   * frame.
+   *
+   * @example
+   * ```ts
+   * world.emit(DamageEvent, { target: e, amount: 50 });
+   * world.emit(GameStarted); // signal — no payload
+   * ```
+   */
   public emit(key: EventKey<readonly []>): void;
   public emit<F extends ComponentFields>(
     key: EventKey<F>,
@@ -306,11 +467,31 @@ export class ECS implements QueryResolver {
     }
   }
 
+  /**
+   * Obtain a reader over an event channel — exposes a `.length` and one
+   * column array per registered field.
+   *
+   * @example
+   * ```ts
+   * const dmg = world.read(DamageEvent);
+   * for (let i = 0; i < dmg.length; i++) {
+   *   console.log(dmg.target[i], dmg.amount[i]);
+   * }
+   * ```
+   */
   public read<F extends ComponentFields>(key: EventKey<F>): EventReader<F> {
     const def = this.store.get_event_def_by_key(key);
     return this.store.get_event_reader(def) as EventReader<F>;
   }
 
+  /**
+   * Build (or fetch from cache) a {@link Query} over entities that have
+   * **all** of the given components. Compose further with
+   * {@link Query.not}, {@link Query.any_of}, and {@link Query.changed}.
+   *
+   * Equivalent to `qb.every(...)` but invokable from outside a system —
+   * useful for ad-hoc inspection.
+   */
   public query<T extends ComponentDef[]>(...defs: T): Query<T> {
     // Reuse scratch_mask to avoid allocating a new BitSet per query call.
     // Zero it out, set bits, then copy for the cache key.
@@ -322,11 +503,12 @@ export class ECS implements QueryResolver {
     return this._resolve_query(mask.copy(), null, null, defs);
   }
 
+  /** @internal */
   public _get_last_run_tick(): number {
     return this.ctx.last_run_tick;
   }
 
-  /** QueryResolver implementation — creates or retrieves a cached Query. */
+  /** @internal */
   public _resolve_query(
     include: BitSet,
     exclude: BitSet | null,
@@ -396,19 +578,29 @@ export class ECS implements QueryResolver {
   }
 
   /**
-   * Register a system.
+   * Register a system — a plain function called by the schedule.
    *
-   *   // Bare function (no query, no lifecycle hooks)
+   * Three call shapes are supported:
+   *
+   * - **Bare function** (no query, no lifecycle hooks):
+   *   ```ts
    *   world.register_system((ctx, dt) => { ... });
-   *
-   *   // Function + query builder
+   *   ```
+   * - **Function + query builder** (most common):
+   *   ```ts
    *   world.register_system(
    *     (q, ctx, dt) => { q.for_each((arch) => { ... }); },
    *     (qb) => qb.every(Pos, Vel),
    *   );
+   *   ```
+   * - **Full {@link SystemConfig}** for lifecycle hooks (`on_added`,
+   *   `on_removed`, `dispose`):
+   *   ```ts
+   *   world.register_system({ fn(ctx, dt) { ... }, on_added(ctx) { ... } });
+   *   ```
    *
-   *   // Full config (for lifecycle hooks)
-   *   world.register_system({ fn(ctx, dt) { ... } });
+   * @returns A frozen {@link SystemDescriptor} — the identity handle used
+   *   for scheduling and ordering constraints.
    */
   public register_system(fn: SystemFn): SystemDescriptor;
   public register_system<Defs extends readonly ComponentDef[]>(
@@ -447,21 +639,44 @@ export class ECS implements QueryResolver {
     return descriptor;
   }
 
+  /**
+   * Schedule one or more systems into a phase. Each entry can be a bare
+   * {@link SystemDescriptor} or a {@link SystemEntry} with `before`/`after`
+   * ordering constraints.
+   *
+   * @example
+   * ```ts
+   * world.add_systems(SCHEDULE.UPDATE, moveSys, {
+   *   system: renderSys,
+   *   ordering: { after: [moveSys] },
+   * });
+   * ```
+   */
   public add_systems(label: SCHEDULE, ...entries: (SystemDescriptor | SystemEntry)[]): this {
     this.schedule.add_systems(label, ...entries);
     return this;
   }
 
+  /**
+   * Unschedule a system. Calls its `on_removed` hook, if any. The descriptor
+   * remains valid and can be re-added with {@link ECS.add_systems}.
+   */
   public remove_system(system: SystemDescriptor): void {
     this.schedule.remove_system(system);
     system.on_removed?.();
     this.systems.delete(system);
   }
 
+  /** Number of registered systems (whether currently scheduled or not). */
   public get system_count(): number {
     return this.systems.size;
   }
 
+  /**
+   * Run the startup phases (`PRE_STARTUP` → `STARTUP` → `POST_STARTUP`)
+   * and invoke each system's `on_added` hook. Call once before the first
+   * {@link ECS.update}.
+   */
   public startup(): void {
     for (const descriptor of this.systems.values()) {
       descriptor.on_added?.(this.ctx);
@@ -469,6 +684,14 @@ export class ECS implements QueryResolver {
     this.schedule.run_startup(this.ctx, this._tick);
   }
 
+  /**
+   * Advance the world by `dt` seconds. Runs the fixed-update phase as many
+   * times as the accumulator permits (capped by
+   * {@link WorldOptions.max_fixed_steps}), then runs `PRE_UPDATE` →
+   * `UPDATE` → `POST_UPDATE`. Events are cleared at the end of each call.
+   *
+   * Call once per frame in your game loop.
+   */
   public update(dt: number): void {
     this.store._tick = this._tick;
 
@@ -489,10 +712,21 @@ export class ECS implements QueryResolver {
     this._tick++;
   }
 
+  /**
+   * Apply pending deferred mutations now (structural changes then
+   * destructions). The schedule calls this automatically between phases;
+   * use it manually only when interleaving deferred and immediate code
+   * outside a system.
+   */
   public flush(): void {
     this.ctx.flush();
   }
 
+  /**
+   * Tear down the world. Calls each system's `dispose` and `on_removed`
+   * hooks, clears the schedule, and drops references. Does not invalidate
+   * already-issued entity IDs but renders them unusable.
+   */
   public dispose(): void {
     for (const descriptor of this.systems.values()) {
       descriptor.dispose?.();

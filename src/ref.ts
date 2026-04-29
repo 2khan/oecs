@@ -26,12 +26,29 @@ import type { ComponentSchema } from "./component";
 import type { ArchetypeColumnLayout } from "./archetype";
 import type { GrowableTypedArray, AnyTypedArray } from "./type_primitives";
 
-/** Maps component schema to scalar get/set properties: { x: number, y: number }. */
+/**
+ * Mutable single-entity component view — exposes each schema field as a
+ * scalar `get`/`set` property backed directly by the SoA column.
+ *
+ * Returned by {@link SystemContext.ref_mut}. Field reads are a single
+ * typed-array index; writes are the same plus a column write.
+ *
+ * @example
+ * ```ts
+ * const pos = ctx.ref_mut(Pos, e);
+ * pos.x += 1;
+ * pos.y += 2;
+ * ```
+ */
 export type ComponentRef<S extends ComponentSchema> = {
   -readonly [K in keyof S]: number;
 };
 
-/** Read-only view of a component reference. Prevents field writes at compile time. */
+/**
+ * Read-only single-entity component view — same shape as
+ * {@link ComponentRef} but writes are a type error. Returned by
+ * {@link SystemContext.ref}.
+ */
 export type ReadonlyComponentRef<S extends ComponentSchema> = {
   readonly [K in keyof S]: number;
 };

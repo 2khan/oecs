@@ -69,10 +69,39 @@ export interface QueryResolver {
   _get_last_run_tick(): number;
 }
 
+/**
+ * A live, cached view over all archetypes matching a component mask.
+ *
+ * Iterate with {@link Query.for_each} — the callback fires once per
+ * non-empty matching archetype. Inside the callback, fetch SoA columns
+ * with `arch.get_column(Def, "field")` and run the tight inner loop over
+ * `arch.entity_count`.
+ *
+ * Compose larger queries by chaining: {@link Query.and},
+ * {@link Query.not}, {@link Query.any_of}, {@link Query.changed}.
+ * Each composition is itself cached, so repeated calls return the same
+ * Query instance.
+ *
+ * @typeParam Defs - Tuple of component definitions in the include mask;
+ *   used by tooling to type-check the components fetched from archetypes.
+ *
+ * @example
+ * ```ts
+ * world.register_system(
+ *   (q) => q.for_each((arch) => {
+ *     const px = arch.get_column(Pos, "x");
+ *     const vx = arch.get_column(Vel, "vx");
+ *     for (let i = 0; i < arch.entity_count; i++) px[i] += vx[i];
+ *   }),
+ *   (qb) => qb.every(Pos, Vel).not(Frozen),
+ * );
+ * ```
+ */
 export class Query<Defs extends readonly ComponentDef[]> {
   private readonly _archetypes: Archetype[];
   private readonly _defs: Defs;
   private readonly _resolver: QueryResolver;
+  /** @internal */
   public readonly _include: BitSet;
   private readonly _exclude: BitSet | null;
   private readonly _any_of: BitSet | null;
@@ -117,11 +146,17 @@ export class Query<Defs extends readonly ComponentDef[]> {
     for (let i = 0; i < archs.length; i++) total += archs[i].entity_count;
     return total;
   }
+
+  /** @internal */
   public get archetypes(): readonly Archetype[] {
     return this._archetypes;
   }
 
-  /** Extend required component set. Returns a new (cached) Query. */
+  /**
+   * Extend the include mask with additional components. Returns a new,
+   * cached Query — calling `.and(C)` repeatedly on the same query is
+   * effectively free.
+   */
   public and<D extends ComponentDef[]>(...comps: D): Query<[...Defs, ...D]> {
     // Fast path: single-component composition (common shape, e.g. q.and(Dead)).
     // Skip BitSet/defs allocations when we already have a cached child.
@@ -153,7 +188,15 @@ export class Query<Defs extends readonly ComponentDef[]> {
     return this._resolver._resolve_query(new_include, this._exclude, this._any_of, new_defs);
   }
 
-  /** Exclude archetypes that have any of these components. */
+  /**
+   * Exclude archetypes that have **any** of these components. Returns a
+   * new, cached Query.
+   *
+   * @example
+   * ```ts
+   * qb.every(Pos, Vel).not(Dead, Frozen)
+   * ```
+   */
   public not(...comps: ComponentDef[]): Query<Defs> {
     if (comps.length === 1) {
       const cid = comps[0] as unknown as number;
@@ -183,6 +226,13 @@ export class Query<Defs extends readonly ComponentDef[]> {
     ) as Query<Defs>;
   }
 
+  /**
+   * Iterate over every non-empty matching archetype. Inside the callback,
+   * fetch SoA columns from the archetype and run the inner loop.
+   *
+   * The `Defs` generic is preserved so `arch.get_column(Def, "field")` is
+   * type-safe for components in the include mask.
+   */
   public for_each(cb: (arch: Archetype) => void): void {
     const archs = this._non_empty();
     for (let i = 0; i < archs.length; i++) {
@@ -209,7 +259,11 @@ export class Query<Defs extends readonly ComponentDef[]> {
     return this._non_empty_archetypes;
   }
 
-  /** Require at least one of these components. */
+  /**
+   * Require **at least one** of the given components in addition to the
+   * include mask. Use to express "either X or Y" without expanding into
+   * multiple queries.
+   */
   public any_of(...comps: ComponentDef[]): Query<Defs> {
     if (comps.length === 1) {
       const cid = comps[0] as unknown as number;
@@ -239,7 +293,18 @@ export class Query<Defs extends readonly ComponentDef[]> {
     ) as Query<Defs>;
   }
 
-  /** Create a ChangedQuery that filters archetypes by change tick. */
+  /**
+   * Wrap this query in a {@link ChangedQuery} that yields only archetypes
+   * whose change tick on at least one of the named components is at or
+   * after the system's last run tick.
+   *
+   * Components passed to `changed()` must already be in the include mask.
+   *
+   * @example
+   * ```ts
+   * (qb) => qb.every(Pos, Vel).changed(Pos)
+   * ```
+   */
   public changed(...defs: ComponentDef[]): ChangedQuery<Defs> {
     if (defs.length === 1) {
       const cid = defs[0] as unknown as number;
@@ -263,9 +328,25 @@ export class Query<Defs extends readonly ComponentDef[]> {
   }
 }
 
+/**
+ * Entry point for building a {@link Query} from inside `register_system`.
+ *
+ * Receives the world implicitly; use {@link QueryBuilder.every} as the
+ * starting node and chain {@link Query.and}, {@link Query.not},
+ * {@link Query.any_of}, {@link Query.changed} for further refinement.
+ *
+ * @example
+ * ```ts
+ * world.register_system(fn, (qb) => qb.every(Pos, Vel).not(Frozen));
+ * ```
+ */
 export class QueryBuilder {
   constructor(private readonly _resolver: QueryResolver) {}
 
+  /**
+   * Start a query that matches archetypes containing **all** of the given
+   * components.
+   */
   public every<T extends ComponentDef[]>(...defs: T): Query<T> {
     const mask = new BitSet();
     for (let i = 0; i < defs.length; i++) mask.set(defs[i] as number);
@@ -273,11 +354,30 @@ export class QueryBuilder {
   }
 }
 
+/**
+ * The handle a system receives. Wraps the world's storage with
+ * deferred-only structural mutations: changes are buffered and applied at
+ * the next phase flush, so iterators stay valid for the duration of the
+ * system.
+ *
+ * Resource and event APIs mirror {@link ECS}; structural APIs
+ * ({@link SystemContext.destroy_entity}, {@link SystemContext.add_component},
+ * {@link SystemContext.remove_component}) buffer rather than apply.
+ *
+ * Use {@link SystemContext.ref} / {@link SystemContext.ref_mut} for
+ * cached single-entity field access — useful when a system inspects a
+ * specific entity (e.g. a player) rather than iterating archetypes.
+ */
 export class SystemContext {
+  /** @internal */
   public readonly store: Store;
+  /** @internal */
   public last_run_tick: number = 0;
 
-  /** Current world tick. Use this for write ticks in get_column_mut. */
+  /**
+   * The current world tick — monotonically increasing counter, advanced
+   * once per {@link ECS.update} call. Useful for change-tick comparisons.
+   */
   public get world_tick(): number {
     return this.store._tick;
   }
@@ -286,10 +386,12 @@ export class SystemContext {
     this.store = store;
   }
 
+  /** Create a new entity. Available immediately (not deferred). */
   public create_entity(): EntityID {
     return this.store.create_entity();
   }
 
+  /** Read a single field from a component on a single entity. */
   public get_field<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -303,6 +405,10 @@ export class SystemContext {
     return arch.read_field(row, def as ComponentID, field);
   }
 
+  /**
+   * Write a single field on a component for a single entity. Marks the
+   * component as changed for {@link Query.changed} detection.
+   */
   public set_field<S extends ComponentSchema>(
     entity_id: EntityID,
     def: ComponentDef<S>,
@@ -318,7 +424,19 @@ export class SystemContext {
     col[row] = value;
   }
 
-  /** Create a cached read-only component reference for a single entity. See ref.ts. */
+  /**
+   * Create a cached read-only reference to a single entity's component.
+   * The archetype + row + column lookup happens once; subsequent field
+   * reads are a single typed-array index. Safe inside systems because
+   * structural changes are deferred — the entity cannot move archetypes
+   * before the next flush.
+   *
+   * @example
+   * ```ts
+   * const pos = ctx.ref(Pos, e);
+   * console.log(pos.x, pos.y);
+   * ```
+   */
   public ref<S extends ComponentSchema>(
     def: ComponentDef<S>,
     entity_id: EntityID,
@@ -332,7 +450,12 @@ export class SystemContext {
     return create_ref<S>(arch.column_groups[def as unknown as number]!, row);
   }
 
-  /** Create a cached mutable component reference. Marks the component as changed. */
+  /**
+   * Create a cached **mutable** reference to a single entity's component.
+   * Marks the component as changed at creation time, so subsequent writes
+   * via the ref are visible to {@link Query.changed} consumers in the
+   * same frame.
+   */
   public ref_mut<S extends ComponentSchema>(
     def: ComponentDef<S>,
     entity_id: EntityID,
@@ -347,12 +470,19 @@ export class SystemContext {
     return create_ref<S>(arch.column_groups[def as unknown as number]!, row);
   }
 
-  /** Buffer an entity for deferred destruction (applied at phase flush). */
+  /**
+   * Buffer an entity for destruction. Applied at the next phase flush.
+   * Idempotent — repeated calls within a frame are safe.
+   */
   public destroy_entity(id: EntityID): this {
     this.store.destroy_entity_deferred(id);
     return this;
   }
 
+  /**
+   * Buffer a component addition. The entity moves archetypes at the next
+   * phase flush. For tag components, omit `values`.
+   */
   public add_component(entity_id: EntityID, def: ComponentDef<Record<string, never>>): this;
   public add_component<S extends ComponentSchema>(
     entity_id: EntityID,
@@ -368,12 +498,21 @@ export class SystemContext {
     return this;
   }
 
+  /**
+   * Buffer a component removal. The entity moves archetypes at the next
+   * phase flush.
+   */
   public remove_component(entity_id: EntityID, def: ComponentDef): this {
     this.store.remove_component_deferred(entity_id, def);
     return this;
   }
 
-  /** Flush all deferred changes: structural (add/remove) first, then destructions. */
+  /**
+   * Apply all buffered structural changes (additions and removals first,
+   * then destructions). The schedule calls this automatically between
+   * phases — invoke manually only when interleaving deferred and immediate
+   * code outside a phase.
+   */
   public flush(): void {
     this.store.flush_structural();
     this.store.flush_destroyed();
@@ -383,6 +522,11 @@ export class SystemContext {
   // Events
   // =======================================================
 
+  /**
+   * Emit an event or signal. For zero-field signals, omit `values`. The
+   * event is readable within the current frame and auto-cleared at end of
+   * frame.
+   */
   public emit(key: EventKey<readonly []>): void;
   public emit<F extends ComponentFields>(
     key: EventKey<F>,
@@ -397,6 +541,10 @@ export class SystemContext {
     }
   }
 
+  /**
+   * Obtain a reader over an event channel — exposes a `.length` and one
+   * column array per registered field.
+   */
   public read<F extends ComponentFields>(key: EventKey<F>): EventReader<F> {
     const def = this.store.get_event_def_by_key(key);
     return this.store.get_event_reader(def) as EventReader<F>;
@@ -406,19 +554,33 @@ export class SystemContext {
   // Resources
   // =======================================================
 
+  /**
+   * Read a resource by key. Throws in development if the key has not been
+   * registered.
+   */
   public resource<T>(key: ResourceKey<T>): T {
     return unsafe_cast<T>(this.store.get_resource(key));
   }
 
+  /** Replace the stored value for a resource. */
   public set_resource<T>(key: ResourceKey<T>, value: T): void {
     this.store.set_resource(key, value);
   }
 
+  /** True if a resource has been registered for the given key. */
   public has_resource<T>(key: ResourceKey<T>): boolean {
     return this.store.has_resource(key);
   }
 }
 
+/**
+ * A {@link Query} wrapper that filters archetypes by per-component change
+ * tick — yields only archetypes whose change tick on at least one of the
+ * named components is at or after the system's last run tick.
+ *
+ * Returned by {@link Query.changed}. The named components must already be
+ * in the parent query's include mask (enforced in development).
+ */
 export class ChangedQuery<Defs extends readonly ComponentDef[]> {
   private readonly _query: Query<Defs>;
   private readonly _changed_ids: number[];
@@ -438,6 +600,11 @@ export class ChangedQuery<Defs extends readonly ComponentDef[]> {
     }
   }
 
+  /**
+   * Iterate over archetypes whose tracked components changed since the
+   * system last ran. Inside the callback, fetch columns and run the inner
+   * loop just like {@link Query.for_each}.
+   */
   public for_each(cb: (arch: Archetype) => void): void {
     const last_tick = this._query._ctx_last_run_tick();
     const archs = this._query._non_empty();
